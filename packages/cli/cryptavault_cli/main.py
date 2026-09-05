@@ -22,7 +22,9 @@ from cryptavault_cli.commands.profile import (
     profile_set_slider_command,
 )
 from cryptavault_cli.commands.profiles import profiles_command
+from cryptavault_cli.commands.share import share_app
 from cryptavault_cli.commands.status import status_command
+from cryptavault_cli.commands.storage import storage_app
 
 app = typer.Typer(
     name="cryptavault",
@@ -39,6 +41,8 @@ profile_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(profile_app, name="profile")
+app.add_typer(storage_app, name="storage")
+app.add_typer(share_app, name="share")
 
 
 @profile_app.command("list")
@@ -67,7 +71,7 @@ def profile_get() -> None:
 def version() -> None:
     """Display CryptaVault version and build info."""
     console.print(
-        "[bold cyan]CryptaVault CLI[/bold cyan] version [green]0.2.0[/green] (Milestone 2 Adaptive Pipeline)"
+        "[bold cyan]CryptaVault CLI[/bold cyan] version [green]0.3.0[/green] (Milestone 3 Storage & Sharing)"
     )
 
 

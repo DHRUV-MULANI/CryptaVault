@@ -176,7 +176,7 @@ def decrypt_command(
                     f"[bold green]✓ Decrypted binary payload ({len(plaintext)} bytes)[/bold green]"
                 )
 
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         console.print(
             f"[bold red]Decryption failed (Corrupted or Tampered Ciphertext):[/bold red] {e}"
         )

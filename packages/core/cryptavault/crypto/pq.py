@@ -168,7 +168,7 @@ class DilithiumSig(SignatureAlgorithm):
         with oqs.Signature(self.mechanism_name) as verifier:
             try:
                 return bool(verifier.verify(message, signature, public_key))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 return False
 
 

@@ -111,7 +111,7 @@ def pipeline_decrypt_command(
         )
         console.print("  [green]All chunks authenticated with fail-closed integrity tags.[/green]")
         console.print()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         console.print(f"[bold red]Pipeline Decryption Failed:[/bold red] {e}")
 
 

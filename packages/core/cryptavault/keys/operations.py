@@ -100,7 +100,7 @@ def rotate_key(
                     parent_id=new_key_id,
                     metadata=child.metadata,
                 )
-            except (KeyHierarchyError, Exception) as err:  # noqa: BLE001
+            except (KeyHierarchyError, Exception) as err:
                 logger.debug("Failed to cascade re-wrap child key %s: %s", child.id, err)
 
     return new_desc, new_key

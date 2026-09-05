@@ -144,7 +144,7 @@ def run_benchmark() -> None:
                     "rating": f"[green]{1.0 / t_encap:.0f} ops/sec (Quantum Resistant)[/green]",
                 }
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             results.append(
                 {
                     "category": "Post-Quantum KEM",
@@ -181,7 +181,7 @@ def run_benchmark() -> None:
                     "rating": f"[green]{1.0 / t_sign:.0f} ops/sec (Quantum Resistant)[/green]",
                 }
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             results.append(
                 {
                     "category": "Post-Quantum Signature",

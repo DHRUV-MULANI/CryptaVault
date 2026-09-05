@@ -134,7 +134,7 @@ def inspect_keystore_command(
         console.print()
         console.print(table)
         console.print()
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         console.print(f"[bold red]Failed to decrypt keystore:[/bold red] {e}")
 
 
@@ -175,5 +175,5 @@ def recover_key_command(
             console.print("[bold green]✓ BIP-39 Recovery phrase valid![/bold green]")
             console.print(f"[bold cyan]Seed Fingerprint:[/bold cyan] [yellow]{fp}[/yellow]")
             console.print("[dim]Key phrase validated offline without server involvement.[/dim]\n")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         console.print(f"[bold red]Recovery failed:[/bold red] {e}")

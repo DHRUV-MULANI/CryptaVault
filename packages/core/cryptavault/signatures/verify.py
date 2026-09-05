@@ -144,7 +144,7 @@ def verify_file(
             expected_hash=expected_hash,
             diagnostics={"error": "MissingKeyError"},
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return VerificationResult(
             status=VerificationStatus.TAMPERED,
             file_path=str(path),

@@ -29,5 +29,5 @@ try:
     # Try querying feature_flags or profiles
     res = supabase.table("profiles").select("*").limit(1).execute()
     print(f"Database query response received: {res.data}")
-except Exception as e:  # noqa: BLE001
+except Exception as e:
     print(f"Supabase query status: {e}")

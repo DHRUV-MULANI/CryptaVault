@@ -27,7 +27,7 @@ class ProfileStore:
             content = json.loads(self.config_file.read_text(encoding="utf-8"))
             profile_name = content.get("active_profile", "BALANCED")
             return get_profile(profile_name)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return get_profile("BALANCED")
 
     def set_active_profile(self, profile_name_or_level: str) -> SecurityProfile:
@@ -39,7 +39,7 @@ class ProfileStore:
         if self.config_file.exists():
             try:
                 config_data = json.loads(self.config_file.read_text(encoding="utf-8"))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 config_data = {}
 
         config_data["active_profile"] = profile.level.value

@@ -222,5 +222,5 @@ class HybridSigPQ(SignatureAlgorithm):
                 return False
 
             return self.pq_sig.verify(pq_pub, message, pq_sig)
-        except Exception:  # noqa: BLE001 - Fail-closed on any malformed signature
+        except Exception:
             return False

@@ -111,7 +111,7 @@ def merkle_command(dir_path: str = ".") -> None:
             leaf_hash = Blake3().digest(data)
             leaves.append(leaf_hash)
             file_map.append((f.name, leaf_hash.hex()[:16], len(data)))
-        except Exception:  # noqa: BLE001, S112
+        except Exception:  # noqa: S112
             continue
 
     if not leaves:

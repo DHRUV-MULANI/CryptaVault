@@ -17,7 +17,7 @@ def check_aesni() -> bool:
             with open("/proc/cpuinfo", "r") as f:
                 content = f.read()
                 return "aes" in content
-    except Exception:  # noqa: BLE001, S110
+    except Exception:
         pass
     return False
 
@@ -29,7 +29,7 @@ def check_avx2() -> bool:
             with open("/proc/cpuinfo", "r") as f:
                 content = f.read()
                 return "avx2" in content
-    except Exception:  # noqa: BLE001, S110
+    except Exception:
         pass
     return False
 
@@ -44,7 +44,7 @@ def status_command() -> None:
         dilithium_supported = bool(
             oqs.is_sig_enabled("ML-DSA-65") or oqs.is_sig_enabled("Dilithium3")
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         pq_available = False
         kyber_supported = False
         dilithium_supported = False

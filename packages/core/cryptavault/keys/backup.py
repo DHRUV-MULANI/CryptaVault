@@ -127,5 +127,5 @@ class KeyRecoveryManager:
         try:
             recovered = self.import_recovery_bundle(mnemonic_phrase, bundle, passphrase=passphrase)
             return len(recovered) == 32
-        except Exception:  # noqa: BLE001
+        except Exception:
             return False
