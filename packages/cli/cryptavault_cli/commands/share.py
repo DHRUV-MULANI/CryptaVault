@@ -20,6 +20,17 @@ from rich.table import Table
 share_app = typer.Typer(
     name="share",
     help="Cryptographic sharing operations (timed links, passwords, QR codes, invitations).",
+    epilog="""
+Examples:
+  # Create a 24-hour timed share link with QR code:
+  cryptavault share create confidential.vault --timed 86400 --qr
+
+  # Create a share link using your custom Cloudflare or university domain:
+  cryptavault share create backup.vault --domain https://vault.yourdomain.com --timed 3600
+
+  # Password-protect the shared file encryption key:
+  cryptavault share create dataset.vault --password "RecipientSecret123!" --qr
+""",
     no_args_is_help=True,
 )
 console = Console()
@@ -46,6 +57,14 @@ def share_create(
     password: Annotated[
         str | None,
         typer.Option("--password", "-p", help="Optional password protecting the share key"),
+    ] = None,
+    domain: Annotated[
+        str | None,
+        typer.Option(
+            "--domain",
+            "-d",
+            help="Custom domain or Cloudflare base URL (e.g. https://vault.yourdomain.com)",
+        ),
     ] = None,
     show_qr: Annotated[
         bool,
@@ -105,9 +124,13 @@ def share_create(
         # Save package
         output_package.write_text(pkg.to_json())
 
-        # Generate signed timed link
+        # Generate signed timed link with custom domain support
+        base_domain = (
+            domain or os.getenv("PUBLIC_SHARE_DOMAIN") or "https://cryptavault.local"
+        ).rstrip("/")
+        base_url = f"{base_domain}/share"
         link = TimedShareLink.generate_link(
-            base_url="https://cryptavault.local/share",
+            base_url=base_url,
             secret_key=file_key,
             file_id=pkg.file_id,
             validity_seconds=expires_seconds,

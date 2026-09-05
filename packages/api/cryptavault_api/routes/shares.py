@@ -34,12 +34,17 @@ class CreateShareRequest(BaseModel):
     share_package_json: str | None = Field(
         default=None, description="Full signed SharePackage JSON"
     )
+    custom_domain: str | None = Field(
+        default=None,
+        description="Custom domain or Cloudflare public domain (e.g. https://vault.yourdomain.com)",
+    )
 
 
 class ShareSummaryResponse(BaseModel):
     token_id: str
     file_id: str
     filename: str
+    share_url: str
     created_at_iso: str
     expires_at_iso: str | None
     max_uses: int
@@ -61,12 +66,21 @@ def create_share(
         max_uses=payload.max_uses,
     )
 
+    base_domain = (
+        payload.custom_domain
+        or os.getenv("PUBLIC_SHARE_DOMAIN")
+        or os.getenv("CUSTOM_SHARE_DOMAIN")
+        or "https://cryptavault.local"
+    ).rstrip("/")
+    share_url = f"{base_domain}/share/{token.token_id}"
+
     record = {
         "token_id": token.token_id,
         "owner_id": user.id,
         "file_id": payload.file_id,
         "filename": payload.filename,
         "ciphertext_ref": payload.ciphertext_ref,
+        "share_url": share_url,
         "nonce_hex": token.nonce_hex,
         "created_at_iso": token.created_at_iso,
         "expires_at_iso": token.expires_at_iso,
@@ -83,6 +97,7 @@ def create_share(
         token_id=token.token_id,
         file_id=payload.file_id,
         filename=payload.filename,
+        share_url=share_url,
         created_at_iso=token.created_at_iso,
         expires_at_iso=token.expires_at_iso,
         max_uses=token.max_uses,
@@ -97,11 +112,13 @@ def list_user_shares(
     user: AuthenticatedUser = Depends(get_current_user),
 ) -> list[ShareSummaryResponse]:
     """List all active and expired shares created by the current user."""
+    default_domain = (os.getenv("PUBLIC_SHARE_DOMAIN") or "https://cryptavault.local").rstrip("/")
     user_shares = [
         ShareSummaryResponse(
             token_id=r["token_id"],
             file_id=r["file_id"],
             filename=r["filename"],
+            share_url=r.get("share_url", f"{default_domain}/share/{r['token_id']}"),
             created_at_iso=r["created_at_iso"],
             expires_at_iso=r["expires_at_iso"],
             max_uses=r["max_uses"],
@@ -233,12 +250,15 @@ def revoke_share(
 
 
 @router.get("/{token_id}/qr")
-def get_share_qr(token_id: str) -> Response:
+def get_share_qr(token_id: str, domain: str | None = None) -> Response:
     """Generate and return PNG QR code for the share link."""
     record = _SHARE_STORE.get(token_id)
     if not record or not record["is_active"]:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Share token not found.")
 
-    url = f"https://cryptavault.local/share/{token_id}"
+    base_domain = (
+        domain or os.getenv("PUBLIC_SHARE_DOMAIN") or "https://cryptavault.local"
+    ).rstrip("/")
+    url = f"{base_domain}/share/{token_id}"
     png_bytes = generate_qr_png(url)
     return Response(content=png_bytes, media_type="image/png")

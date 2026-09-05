@@ -21,6 +21,7 @@ from cryptavault_api.routes.ai import router as ai_router
 from cryptavault_api.routes.audit import router as audit_router
 from cryptavault_api.routes.metrics import router as metrics_router
 from cryptavault_api.routes.shares import router as shares_router
+from cryptavault_api.routes.storage import router as storage_router
 from cryptavault_api.routes.users import router as users_router
 
 
@@ -59,6 +60,7 @@ app.add_middleware(RateLimitMiddleware, requests_per_minute=120, auth_requests_p
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(shares_router)
+app.include_router(storage_router)
 app.include_router(audit_router)
 app.include_router(admin_router)
 app.include_router(metrics_router)

@@ -174,3 +174,31 @@ def test_api_ai_recommend_and_chat() -> None:
     res_concepts = client.get("/api/ai/concepts")
     assert res_concepts.status_code == 200
     assert len(res_concepts.json()) >= 10
+
+
+def test_storage_r2_and_upload_api() -> None:
+    """Verify Cloudflare R2 storage registration and zero-knowledge upload route."""
+    from cryptavault.storage.cloud.r2 import CloudflareR2Storage
+    from cryptavault.storage.registry import resolve_storage
+
+    r2_conn = resolve_storage("r2://my-test-vault")
+    assert isinstance(r2_conn, CloudflareR2Storage)
+    assert r2_conn.scheme == "r2"
+
+    headers = {"Authorization": "Bearer mock-user-token-alice"}
+    file_content = b"CVLT\x01\x00\x03\x01CIPHERTEXT_TEST_PAYLOAD"
+    files = {"file": ("test_doc.vault", file_content, "application/octet-stream")}
+    data = {
+        "backend": "r2",
+        "profile_level": "MAXIMUM",
+        "custom_domain": "https://vault.mycollegedomain.com",
+    }
+    res = client.post("/api/storage/upload", headers=headers, files=files, data=data)
+    assert res.status_code == 200
+    res_json = res.json()
+    assert res_json["storage_backend"] == "r2"
+    assert "https://vault.mycollegedomain.com" in res_json["public_url"]
+
+    res_list = client.get("/api/storage/files", headers=headers)
+    assert res_list.status_code == 200
+    assert len(res_list.json()) >= 1

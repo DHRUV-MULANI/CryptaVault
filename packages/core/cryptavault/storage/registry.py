@@ -9,6 +9,7 @@ from cryptavault.storage.base import StorageConnector
 from cryptavault.storage.cloud.dropbox import DropboxStorage
 from cryptavault.storage.cloud.gdrive import GoogleDriveStorage
 from cryptavault.storage.cloud.onedrive import OneDriveStorage
+from cryptavault.storage.cloud.r2 import CloudflareR2Storage
 from cryptavault.storage.ftp import FtpStorage
 from cryptavault.storage.local import LocalStorage
 from cryptavault.storage.mock import MockStorage
@@ -51,6 +52,12 @@ def resolve_storage(uri_or_path: str) -> StorageConnector:
             parsed.path.strip("/").split("/")[0] if parsed.path else "vaults"
         )
         return SupabaseStorage(bucket_name=bucket)
+
+    if scheme in ("r2", "s3"):
+        bucket = parsed.netloc or (
+            parsed.path.strip("/").split("/")[0] if parsed.path else "vaults"
+        )
+        return CloudflareR2Storage(bucket_name=bucket)
 
     if scheme == "sftp":
         return SftpStorage.from_uri(uri_or_path)

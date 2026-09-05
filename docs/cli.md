@@ -34,8 +34,9 @@ cryptavault --help
 | `cryptavault sign` | PQ Signatures | Sign a file using Post-Quantum Hybrid Signatures (Ed25519 + Dilithium-3 / FIPS 204). |
 | `cryptavault verify` | PQ Signatures | Verify integrity and authenticity against a post-quantum hybrid signature. |
 | `cryptavault merkle` | Integrity | Compute BLAKE3 Merkle Tree root hash and audit proof for all files in a directory. |
-| `cryptavault storage ...` | Multi-Backend | Sync, upload, download, and list across Local, Supabase, SFTP, FTP, and Cloud targets. |
-| `cryptavault share ...` | Zero-Knowledge Sharing | Generate HMAC one-time access links, timed share links, wrapped passphrases, and QR codes. |
+| `cryptavault storage ...` | Multi-Backend | Sync, upload, download, and list across Local, Supabase, Cloudflare R2, SFTP, FTP, and Cloud targets. |
+| `cryptavault share ...` | Zero-Knowledge Sharing | Generate HMAC one-time access links, timed share links, custom domain URLs, wrapped passphrases, and QR codes. |
+| `cryptavault teach` | Interactive Academy | Interactive educational guides, concept walkthroughs, and practical command demonstrations. |
 | `cryptavault ai advise` | AI Advisory | Analyze file metadata (extension, size) and recommend optimal compression & crypto profiles with code-enforced data minimization. |
 | `cryptavault ai explain` | AI Advisory | Query the offline cryptographic knowledge base for primitive specifications and NIST standards. |
 | `cryptavault ai concepts` | AI Advisory | List all available cryptographic concepts in the curated knowledge base. |
@@ -87,25 +88,43 @@ cryptavault verify release.tar.gz --sig release.sig --pubkey release.pub
 cryptavault merkle --dir ./data
 ```
 
-### 5. Multi-Backend Cloud Storage
+### 5. Multi-Backend Cloud Storage (Supabase & Cloudflare R2)
 ```bash
 # Upload to Supabase Storage bucket (zero-knowledge ciphertext only)
 cryptavault storage upload --source document.vault --backend supabase --remote-path /vaults/doc1.vault
+
+# Upload to Cloudflare R2 Object Storage ($0 egress bandwidth fees)
+cryptavault storage upload --source document.vault --backend r2 --remote-path /vaults/doc1.vault
 
 # Upload to SFTP server
 cryptavault storage upload --source backup.vault --backend sftp --remote-path /backups/backup.vault
 ```
 
-### 6. Zero-Knowledge Sharing & QR Codes
+### 6. Zero-Knowledge Sharing & Custom Domain Links
 ```bash
-# Create a 24-hour timed share link with QR code
-cryptavault share create --file-id "file-uuid-123" --expiry-hours 24 --qr
+# Create a 24-hour timed share link with QR code using custom domain
+cryptavault share create document.vault --domain https://vault.yourdomain.com --timed 86400 --qr
 
 # Wrap a symmetric file key for a recipient with a shared password
 cryptavault share wrap-password --file-key-hex "0123...cdef" --password "one-time-secret"
 ```
 
-### 7. AI Security Advisory
+### 7. Interactive Educational Academy
+```bash
+# View all interactive learning topics
+cryptavault teach
+
+# Learn about Post-Quantum Hybrid Cryptography:
+cryptavault teach pqc
+
+# Learn about Zero-Knowledge client boundaries:
+cryptavault teach zero-knowledge
+
+# Learn about Cloudflare R2 zero-egress benefits:
+cryptavault teach storage
+```
+
+### 8. AI Security Advisory
 ```bash
 # Get intelligent recommendations with code-level data minimization
 cryptavault ai advise financial_records.xlsx

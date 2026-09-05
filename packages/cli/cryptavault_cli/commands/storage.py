@@ -12,7 +12,21 @@ from rich.table import Table
 
 storage_app = typer.Typer(
     name="storage",
-    help="Multi-backend storage operations (Local, Supabase, SFTP, FTP, Cloud).",
+    help="Multi-backend storage operations (Local, Supabase, Cloudflare R2, SFTP, FTP, Cloud).",
+    epilog="""
+Examples:
+  # Upload encrypted file to Supabase Storage:
+  cryptavault storage upload backup.vault supabase://vaults
+
+  # Upload encrypted file to Cloudflare R2 (zero egress fees):
+  cryptavault storage upload backup.vault r2://my-bucket
+
+  # List files stored in Supabase:
+  cryptavault storage list supabase://vaults
+
+  # Download from Cloudflare R2:
+  cryptavault storage download r2://my-bucket/backup.vault ./restored.vault
+""",
     no_args_is_help=True,
 )
 console = Console()
