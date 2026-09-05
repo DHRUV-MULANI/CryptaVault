@@ -3,6 +3,7 @@
 import typer
 from rich.console import Console
 
+from cryptavault_cli.commands.ai import ai_app
 from cryptavault_cli.commands.benchmark import run_benchmark
 from cryptavault_cli.commands.crypto import decrypt_command, encrypt_command
 from cryptavault_cli.commands.integrity import merkle_command, sign_command, verify_command
@@ -43,6 +44,7 @@ profile_app = typer.Typer(
 app.add_typer(profile_app, name="profile")
 app.add_typer(storage_app, name="storage")
 app.add_typer(share_app, name="share")
+app.add_typer(ai_app, name="ai")
 
 
 @profile_app.command("list")
@@ -71,7 +73,7 @@ def profile_get() -> None:
 def version() -> None:
     """Display CryptaVault version and build info."""
     console.print(
-        "[bold cyan]CryptaVault CLI[/bold cyan] version [green]0.3.0[/green] (Milestone 3 Storage & Sharing)"
+        "[bold cyan]CryptaVault CLI[/bold cyan] version [green]1.0.0[/green] (Release v1.0.0 Production)"
     )
 
 

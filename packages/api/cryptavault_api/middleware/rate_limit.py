@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 import uuid
 from collections import defaultdict
+from typing import Any
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -15,14 +16,17 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     """In-memory sliding window rate limiter per client IP."""
 
     def __init__(
-        self, app, requests_per_minute: int = 120, auth_requests_per_minute: int = 30
+        self,
+        app: Any,
+        requests_per_minute: int = 120,
+        auth_requests_per_minute: int = 30,
     ) -> None:
         super().__init__(app)
         self.rpm = requests_per_minute
         self.auth_rpm = auth_requests_per_minute
         self._history: dict[str, list[float]] = defaultdict(list)
 
-    async def dispatch(self, request: Request, call_next) -> Response:
+    async def dispatch(self, request: Request, call_next: Any) -> Response:
         request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
         client_ip = request.client.host if request.client else "127.0.0.1"
 

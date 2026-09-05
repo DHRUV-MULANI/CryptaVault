@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -15,13 +16,16 @@ load_dotenv()
 
 from cryptavault_api.auth.session import router as auth_router
 from cryptavault_api.middleware.rate_limit import RateLimitMiddleware
+from cryptavault_api.routes.admin import router as admin_router
+from cryptavault_api.routes.ai import router as ai_router
 from cryptavault_api.routes.audit import router as audit_router
+from cryptavault_api.routes.metrics import router as metrics_router
 from cryptavault_api.routes.shares import router as shares_router
 from cryptavault_api.routes.users import router as users_router
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application startup and shutdown hooks."""
     # Log startup status
     yield
@@ -29,8 +33,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="CryptaVault API",
-    version="0.3.0",
-    description="Zero-Knowledge Backend API with Supabase Auth, Storage Coordination, and Auditing",
+    version="1.0.0",
+    description="Zero-Knowledge Backend API with Supabase Auth, Storage Coordination, Auditing, and AI Advisory",
     lifespan=lifespan,
 )
 
@@ -56,6 +60,9 @@ app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(shares_router)
 app.include_router(audit_router)
+app.include_router(admin_router)
+app.include_router(metrics_router)
+app.include_router(ai_router)
 
 
 @app.get("/health")

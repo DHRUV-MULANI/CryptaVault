@@ -82,12 +82,12 @@ async def get_current_user(
     try:
         supabase = get_supabase_client()
         user_res = supabase.auth.get_user(token)
-        user = user_res.user
-        if not user:
+        if user_res is None or user_res.user is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="User not found or session expired",
             )
+        user = user_res.user
         role = user.app_metadata.get("role", "user") if user.app_metadata else "user"
         return AuthenticatedUser(
             id=user.id,

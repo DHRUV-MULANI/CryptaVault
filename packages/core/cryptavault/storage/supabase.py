@@ -36,7 +36,7 @@ class SupabaseStorage(StorageConnector):
 
         if client is not None:
             self._client = client
-        elif create_client and self.url and self.key:
+        elif create_client is not None and self.url and self.key:
             self._client = create_client(self.url, self.key)
         else:
             self._client = None
@@ -49,7 +49,7 @@ class SupabaseStorage(StorageConnector):
         if self._client is None:
             if not self.url or not self.key:
                 raise ConnectionError("Missing SUPABASE_URL or SUPABASE_KEY credentials.")
-            if not create_client:
+            if create_client is None:
                 raise ImportError(
                     "supabase package is not installed. Install with `uv pip install supabase`."
                 )

@@ -48,6 +48,7 @@ class FtpStorage(StorageConnector):
         return "ftp"
 
     def authenticate(self) -> None:
+        ftp_client: ftplib.FTP
         if self.use_tls:
             ftp_client = ftplib.FTP_TLS()
         else:
