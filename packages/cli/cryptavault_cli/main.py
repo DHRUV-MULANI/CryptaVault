@@ -11,6 +11,16 @@ from cryptavault_cli.commands.keys import (
     keygen_command,
     recover_key_command,
 )
+from cryptavault_cli.commands.pipeline import (
+    pipeline_decrypt_command,
+    pipeline_encrypt_command,
+    shred_command,
+)
+from cryptavault_cli.commands.profile import (
+    profile_get_command,
+    profile_list_command,
+    profile_set_slider_command,
+)
 from cryptavault_cli.commands.profiles import profiles_command
 from cryptavault_cli.commands.status import status_command
 
@@ -22,12 +32,42 @@ app = typer.Typer(
 )
 console = Console()
 
+# Profile sub-app
+profile_app = typer.Typer(
+    name="profile",
+    help="Manage and configure adaptive security profiles",
+    no_args_is_help=True,
+)
+app.add_typer(profile_app, name="profile")
+
+
+@profile_app.command("list")
+def profile_list() -> None:
+    """List all 5 security presets with slider ranges."""
+    profile_list_command()
+
+
+@profile_app.command("set")
+def profile_set(
+    slider: float = typer.Option(
+        ..., "--slider", "-s", help="Slider percentage (0.0 to 100.0) mapping to security tier"
+    ),
+) -> None:
+    """Set active profile by specifying slider percentage (0 to 100)."""
+    profile_set_slider_command(slider)
+
+
+@profile_app.command("get")
+def profile_get() -> None:
+    """Display current active security profile."""
+    profile_get_command()
+
 
 @app.command(name="version")
 def version() -> None:
     """Display CryptaVault version and build info."""
     console.print(
-        "[bold cyan]CryptaVault CLI[/bold cyan] version [green]0.1.0[/green] (Milestone 1 Core)"
+        "[bold cyan]CryptaVault CLI[/bold cyan] version [green]0.2.0[/green] (Milestone 2 Adaptive Pipeline)"
     )
 
 
@@ -68,7 +108,10 @@ def inspect_keystore(
         "vault.keystore", "--keystore", "-k", help="Path to keystore file"
     ),
     passphrase: str = typer.Option(
-        None, "--passphrase", "-p", help="Passphrase to decrypt keystore (prompted if omitted)"
+        None,
+        "--passphrase",
+        "-p",
+        help="Passphrase to decrypt keystore (prompted if omitted)",
     ),
 ) -> None:
     """Inspect encrypted keystore envelope metadata and key fingerprints."""
@@ -94,7 +137,10 @@ def encrypt(
         "BALANCED", "--profile", help="Security profile: PERFORMANCE, BALANCED, HIGH, MAXIMUM"
     ),
     passphrase: str = typer.Option(
-        "cryptavault-demo-passphrase", "--passphrase", "-p", help="Passphrase for key derivation"
+        "cryptavault-demo-passphrase",
+        "--passphrase",
+        "-p",
+        help="Passphrase for key derivation",
     ),
 ) -> None:
     """Encrypt a file or text string using adaptive authenticated encryption."""
@@ -117,7 +163,10 @@ def decrypt(
         None, "--output", "-o", help="Output file path for decrypted plaintext"
     ),
     passphrase: str = typer.Option(
-        "cryptavault-demo-passphrase", "--passphrase", "-p", help="Passphrase used for decryption"
+        "cryptavault-demo-passphrase",
+        "--passphrase",
+        "-p",
+        help="Passphrase used for decryption",
     ),
 ) -> None:
     """Decrypt a file or base64 envelope with authentication tag verification."""
@@ -127,6 +176,55 @@ def decrypt(
         output_path=output_file,
         passphrase=passphrase,
     )
+
+
+@app.command(name="pipeline-encrypt")
+def pipeline_encrypt(
+    input_file: str = typer.Argument(
+        ..., help="Path of file to process through streaming pipeline"
+    ),
+    output_file: str = typer.Option(None, "--output", "-o", help="Output path for .vault artifact"),
+    profile: str = typer.Option("BALANCED", "--profile", help="Security profile tier"),
+    passphrase: str = typer.Option(
+        "cryptavault-demo-passphrase", "--passphrase", "-p", help="Passphrase"
+    ),
+) -> None:
+    """Process a file through the full streaming pipeline (compression + chunked AEAD + Merkle + PQC sig)."""
+    pipeline_encrypt_command(
+        input_file=input_file,
+        output_file=output_file,
+        profile_name=profile,
+        passphrase=passphrase,
+    )
+
+
+@app.command(name="pipeline-decrypt")
+def pipeline_decrypt(
+    vault_file: str = typer.Argument(..., help="Path to encrypted .vault artifact"),
+    output_file: str = typer.Option(None, "--output", "-o", help="Output path for decrypted file"),
+    profile: str = typer.Option("BALANCED", "--profile", help="Security profile tier"),
+    passphrase: str = typer.Option(
+        "cryptavault-demo-passphrase", "--passphrase", "-p", help="Passphrase"
+    ),
+) -> None:
+    """Decrypt a chunked vault artifact with streaming fail-closed tag verification."""
+    pipeline_decrypt_command(
+        input_file=vault_file,
+        output_file=output_file,
+        profile_name=profile,
+        passphrase=passphrase,
+    )
+
+
+@app.command(name="shred")
+def shred(
+    file_path: str = typer.Argument(..., help="Path of file to cryptographically shred"),
+    passes: int = typer.Option(
+        3, "--passes", help="Number of overwrite passes (default 3, DoD 5220.22-M)"
+    ),
+) -> None:
+    """Permanently destroy a file using DoD 5220.22-M multi-pass overwrite before unlinking."""
+    shred_command(file_path=file_path, passes=passes)
 
 
 @app.command(name="sign")

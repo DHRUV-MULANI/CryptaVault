@@ -52,9 +52,14 @@ packages/wasm/dist/
 *.key
 *.cert
 *.crt
+*.keystore
+*.recovery.json
+*.sig
+*.pub
 keystore/
 secrets/
 *.secret
+For_me_only
 
 # IDE & OS
 .idea/

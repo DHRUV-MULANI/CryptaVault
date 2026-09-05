@@ -1,10 +1,11 @@
 """Security Profile Definitions for CryptaVault Adaptive Cryptographic Engine.
 
-Defines the 4 core security profiles:
-- PERFORMANCE: Maximizes throughput on constrained devices with classical high-speed primitives.
-- BALANCED (Default): Optimal trade-off between modern security, compliance, and speed.
-- HIGH: Heightened classical margin with early post-quantum defense.
-- MAXIMUM: Post-quantum mandatory, maximum memory-hard KDF, and defense-in-depth.
+Defines the 5 core adaptive security profiles:
+- PERFORMANCE (0–20% slider): Maximizes throughput on constrained devices with classical high-speed primitives.
+- STANDARD (20–40% slider): Lightweight cloud storage with standard NIST compliance.
+- BALANCED (40–60% slider, Default): Optimal trade-off between modern security, compliance, and speed.
+- STRONG (60–80% slider): Heightened classical margin with mandatory post-quantum hybrid defense.
+- MAXIMUM (80–100% slider): Post-quantum mandatory, dual-layer AEAD, maximum memory-hard KDF, and forward secrecy.
 """
 
 from __future__ import annotations
@@ -18,8 +19,9 @@ class SecurityLevel(str, Enum):
     """Enumeration of adaptive security tiers."""
 
     PERFORMANCE = "PERFORMANCE"
+    STANDARD = "STANDARD"
     BALANCED = "BALANCED"
-    HIGH = "HIGH"
+    STRONG = "STRONG"
     MAXIMUM = "MAXIMUM"
 
 
@@ -48,6 +50,18 @@ class SecurityProfile(BaseModel):
     post_quantum_protected: bool = Field(
         default=False, description="Whether PQ primitives are active"
     )
+    metadata_encryption: bool = Field(
+        default=True, description="Whether file manifests and metadata are encrypted"
+    )
+    audit_logging: bool = Field(
+        default=True, description="Whether tamper-evident signed audit trails are generated"
+    )
+    forward_secrecy: bool = Field(
+        default=False, description="Whether ratcheted per-file keys are used"
+    )
+    multi_layer_encryption: bool = Field(
+        default=False, description="Whether dual-layer AEAD encryption is applied"
+    )
 
 
 PROFILE_PERFORMANCE = SecurityProfile(
@@ -64,6 +78,30 @@ PROFILE_PERFORMANCE = SecurityProfile(
     compression_algorithm="zstd",
     chunk_size_bytes=4 * 1024 * 1024,  # 4 MiB
     post_quantum_protected=False,
+    metadata_encryption=False,
+    audit_logging=True,
+    forward_secrecy=False,
+    multi_layer_encryption=False,
+)
+
+PROFILE_STANDARD = SecurityProfile(
+    name="Standard Security",
+    level=SecurityLevel.STANDARD,
+    description="Cost-effective enterprise storage baseline with NIST compliance.",
+    symmetric_cipher="aes-256-gcm",
+    hash_algorithm="sha256",
+    signature_algorithm="ed25519",
+    kem_algorithm="x25519",
+    kdf_memory_cost_kib=49152,  # 48 MiB
+    kdf_time_cost=3,
+    kdf_parallelism=4,
+    compression_algorithm="zstd",
+    chunk_size_bytes=4 * 1024 * 1024,  # 4 MiB
+    post_quantum_protected=False,
+    metadata_encryption=True,
+    audit_logging=True,
+    forward_secrecy=False,
+    multi_layer_encryption=False,
 )
 
 PROFILE_BALANCED = SecurityProfile(
@@ -80,44 +118,57 @@ PROFILE_BALANCED = SecurityProfile(
     compression_algorithm="zstd",
     chunk_size_bytes=4 * 1024 * 1024,  # 4 MiB
     post_quantum_protected=True,
+    metadata_encryption=True,
+    audit_logging=True,
+    forward_secrecy=False,
+    multi_layer_encryption=False,
 )
 
-PROFILE_HIGH = SecurityProfile(
-    name="High Security",
-    level=SecurityLevel.HIGH,
-    description="Enhanced protection for sensitive personal and proprietary business data.",
+PROFILE_STRONG = SecurityProfile(
+    name="Strong Security",
+    level=SecurityLevel.STRONG,
+    description="Enhanced side-channel defense with ChaCha20-Poly1305 and dual post-quantum signatures.",
     symmetric_cipher="chacha20-poly1305",
     hash_algorithm="blake3",
-    signature_algorithm="ed25519",
-    kem_algorithm="hybrid-kem-classical",
+    signature_algorithm="hybrid-sig-pq",
+    kem_algorithm="hybrid-kem-pq",
     kdf_memory_cost_kib=65536,  # 64 MiB
     kdf_time_cost=4,
     kdf_parallelism=4,
     compression_algorithm="zstd",
     chunk_size_bytes=8 * 1024 * 1024,  # 8 MiB
     post_quantum_protected=True,
+    metadata_encryption=True,
+    audit_logging=True,
+    forward_secrecy=True,
+    multi_layer_encryption=False,
 )
 
 PROFILE_MAXIMUM = SecurityProfile(
     name="Maximum Post-Quantum Security",
     level=SecurityLevel.MAXIMUM,
-    description="State-sponsored threat model protection with NIST ML-KEM/ML-DSA and SHA3-512.",
+    description="State-sponsored threat model protection with dual-layer AEAD, NIST ML-KEM/ML-DSA, and SHA3-512.",
     symmetric_cipher="aes-256-gcm",
     hash_algorithm="sha3-512",
-    signature_algorithm="ed25519",
-    kem_algorithm="hybrid-kem-classical",
+    signature_algorithm="hybrid-sig-pq",
+    kem_algorithm="hybrid-kem-pq",
     kdf_memory_cost_kib=131072,  # 128 MiB
     kdf_time_cost=5,
     kdf_parallelism=4,
     compression_algorithm="zstd",
     chunk_size_bytes=16 * 1024 * 1024,  # 16 MiB
     post_quantum_protected=True,
+    metadata_encryption=True,
+    audit_logging=True,
+    forward_secrecy=True,
+    multi_layer_encryption=True,
 )
 
 _PROFILES_BY_LEVEL: dict[SecurityLevel, SecurityProfile] = {
     SecurityLevel.PERFORMANCE: PROFILE_PERFORMANCE,
+    SecurityLevel.STANDARD: PROFILE_STANDARD,
     SecurityLevel.BALANCED: PROFILE_BALANCED,
-    SecurityLevel.HIGH: PROFILE_HIGH,
+    SecurityLevel.STRONG: PROFILE_STRONG,
     SecurityLevel.MAXIMUM: PROFILE_MAXIMUM,
 }
 
@@ -141,6 +192,30 @@ def get_profile(level_or_name: str | SecurityLevel) -> SecurityProfile:
 def list_profiles() -> list[SecurityProfile]:
     """Return all available security profiles."""
     return list(_PROFILES_BY_LEVEL.values())
+
+
+def resolve_slider(percentage: float) -> SecurityProfile:
+    """Resolve a slider percentage (0.0 to 100.0) to a concrete SecurityProfile.
+
+    Ranges:
+    - 0 <= pct < 20: PERFORMANCE
+    - 20 <= pct < 40: STANDARD
+    - 40 <= pct < 60: BALANCED
+    - 60 <= pct < 80: STRONG
+    - 80 <= pct <= 100: MAXIMUM
+    """
+    if percentage < 0.0 or percentage > 100.0:
+        raise ValueError(f"Slider percentage must be between 0 and 100, got {percentage}")
+
+    if percentage < 20.0:
+        return PROFILE_PERFORMANCE
+    if percentage < 40.0:
+        return PROFILE_STANDARD
+    if percentage < 60.0:
+        return PROFILE_BALANCED
+    if percentage < 80.0:
+        return PROFILE_STRONG
+    return PROFILE_MAXIMUM
 
 
 SECURITY_PROFILES: dict[str, SecurityProfile] = {
