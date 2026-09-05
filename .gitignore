@@ -58,6 +58,8 @@ packages/wasm/dist/
 *.pub
 keystore/
 secrets/
+*.vault
+share.json
 *.secret
 For_me_only
 
