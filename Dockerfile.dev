@@ -1,0 +1,42 @@
+# Dockerfile.dev - Development environment for CryptaVault
+FROM python:3.11-slim
+
+# Install system build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    ninja-build \
+    git \
+    libssl-dev \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js 20 & pnpm
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && npm install -g pnpm
+
+# Install uv for fast Python dependency management
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+
+WORKDIR /workspace
+
+# Copy configuration files
+COPY pyproject.toml package.json pnpm-workspace.yaml turbo.json ./
+COPY packages/ ./packages/
+
+# Install python dependencies and liboqs
+RUN uv venv .venv --python 3.11 \
+    && uv pip install --python .venv/bin/python \
+        -e packages/core \
+        -e packages/api \
+        -e packages/cli \
+        pytest hypothesis ruff black mypy httpx liboqs-python
+
+# Install Node dependencies
+RUN pnpm install
+
+EXPOSE 8000 3000 3001
+
+CMD ["/bin/bash"]

@@ -1,0 +1,12 @@
+{
+  "kem_algorithm": "Kyber768",
+  "sig_algorithm": "ML-DSA-65",
+  "kem_public_key_len": 1184,
+  "kem_ciphertext_len": 1088,
+  "kem_shared_secret_len": 32,
+  "sig_public_key_len": 1952,
+  "sig_signature_len": 3309,
+  "status": "verified",
+  "liboqs_version": "0.16.0",
+  "date": "2026-09-05"
+}

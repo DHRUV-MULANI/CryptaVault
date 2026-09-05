@@ -30,6 +30,6 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 minversion = "7.0"
-addopts = "-ra -q --hypothesis-seed=0"
+addopts = "-ra -q --hypothesis-seed=0 --import-mode=importlib"
 testpaths = ["packages/core/tests", "packages/api/tests", "packages/cli/tests"]
 pythonpath = ["packages/core", "packages/api", "packages/cli"]

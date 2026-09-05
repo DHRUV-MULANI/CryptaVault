@@ -1,0 +1,93 @@
+name: CI Quality Gate
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-quality:
+    name: Python Quality (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          version: "latest"
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          uv venv .venv --python ${{ matrix.python-version }}
+          uv pip install --python .venv/bin/python \
+            -e packages/core \
+            -e packages/api \
+            -e packages/cli \
+            pytest hypothesis ruff black mypy httpx cmake ninja
+
+      - name: Lint with Ruff
+        run: |
+          source .venv/bin/activate
+          ruff check .
+
+      - name: Format check with Black
+        run: |
+          source .venv/bin/activate
+          black --check .
+
+      - name: Typecheck with Mypy
+        run: |
+          source .venv/bin/activate
+          mypy packages/core/cryptavault packages/api/cryptavault_api packages/cli/cryptavault_cli
+
+      - name: Run Pytest Suite
+        run: |
+          source .venv/bin/activate
+          pytest packages/core/tests packages/api/tests packages/cli/tests --hypothesis-seed=0
+
+  web-quality:
+    name: Web & Admin TypeScript Quality (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: ["20.x"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Typecheck TypeScript Workspaces
+        run: pnpm run typecheck
+
+      - name: Build Web & Admin Packages
+        run: pnpm run build
