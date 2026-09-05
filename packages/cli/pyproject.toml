@@ -1,0 +1,36 @@
+[project]
+name = "cryptavault-cli"
+version = "0.1.0"
+description = "Command-line interface for CryptaVault zero-knowledge cryptographic storage"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "CryptaVault Contributors" }]
+dependencies = [
+    "cryptavault-core",
+    "typer>=0.12.5",
+    "rich>=13.9.0",
+    "pydantic>=2.9.0",
+    "httpx>=0.27.0",
+]
+
+[project.scripts]
+cryptavault = "cryptavault_cli.main:app"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.6.0",
+    "black>=24.8.0",
+    "mypy>=1.11.0",
+]
+
+[tool.uv.sources]
+cryptavault-core = { workspace = true }
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cryptavault_cli*"]
