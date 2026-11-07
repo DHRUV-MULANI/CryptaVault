@@ -10,7 +10,7 @@ console = Console()
 
 
 def profile_list_command() -> None:
-    """Display all 5 adaptive security presets with slider ranges."""
+    """Display all 6 adaptive security presets with slider ranges."""
     table = Table(
         title="CryptaVault Adaptive Security Presets", show_header=True, header_style="bold magenta"
     )
@@ -26,7 +26,8 @@ def profile_list_command() -> None:
         "STANDARD": "20% – 40%",
         "BALANCED": "40% – 60%",
         "STRONG": "60% – 80%",
-        "MAXIMUM": "80% – 100%",
+        "PQ_STRONG": "80% – 90%",
+        "MAXIMUM": "90% – 100%",
     }
 
     for name, p in SECURITY_PROFILES.items():

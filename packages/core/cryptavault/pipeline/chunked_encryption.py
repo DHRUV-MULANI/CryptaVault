@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import io
 import struct
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from typing import BinaryIO
 
@@ -121,9 +121,12 @@ class ChunkedDecryptor:
         key: bytes,
         config: PipelineConfig,
         file_id: str = "default",
+        on_chunk: Callable[[EncryptedChunk], None] | None = None,
     ) -> int:
         """Decrypt all chunks from encrypted_stream into output_stream.
 
+        ``on_chunk`` is invoked after each chunk authenticates successfully, which
+        lets callers rebuild integrity state without re-reading the stream.
         Returns total decrypted bytes written.
         Raises ChunkOutOfOrderError or InvalidTagError on any corruption/tampering.
         """
@@ -153,6 +156,9 @@ class ChunkedDecryptor:
 
             output_stream.write(plaintext_chunk)
             total_bytes += len(plaintext_chunk)
+
+            if on_chunk is not None:
+                on_chunk(chunk)
 
             if chunk.is_final:
                 saw_final = True

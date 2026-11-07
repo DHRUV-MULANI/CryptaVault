@@ -76,7 +76,7 @@ app.add_typer(teach_app, name="teach")
 
 @profile_app.command("list")
 def profile_list() -> None:
-    """List all 5 security presets with slider ranges."""
+    """List all 6 security presets with slider ranges."""
     profile_list_command()
 
 
@@ -124,7 +124,7 @@ Example:
 """,
 )
 def profiles() -> None:
-    """List all adaptive cryptographic security profiles (PERFORMANCE, BALANCED, HIGH, MAXIMUM)."""
+    """List all adaptive cryptographic security profiles (PERFORMANCE through MAXIMUM)."""
     profiles_command()
 
 

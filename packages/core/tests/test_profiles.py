@@ -16,15 +16,16 @@ from cryptavault.plugins.registry import (
 
 
 def test_list_profiles() -> None:
-    """Ensure all 5 security tiers are defined and returned."""
+    """Ensure all 6 security tiers are defined and returned."""
     profiles = list_profiles()
-    assert len(profiles) == 5
+    assert len(profiles) == 6
     levels = {p.level for p in profiles}
     assert levels == {
         SecurityLevel.PERFORMANCE,
         SecurityLevel.STANDARD,
         SecurityLevel.BALANCED,
         SecurityLevel.STRONG,
+        SecurityLevel.PQ_STRONG,
         SecurityLevel.MAXIMUM,
     }
 

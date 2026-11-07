@@ -1,6 +1,6 @@
 # CryptaVault End-to-End Showcase Demo Guide
 
-This document provides a step-by-step, 100% reproducible demonstration of the CryptaVault system across the **CLI**, the **FastAPI Zero-Knowledge Backend**, the **Web Client (React + WASM)**, and the **Admin Governance Console**.
+This document provides a reproducible demonstration across the **CLI**, the **zero-knowledge web portal**, and the optional **FastAPI backend**. The deployed portal uses native Web Crypto, not WASM.
 
 ---
 
@@ -10,25 +10,23 @@ To showcase the entire distributed ecosystem, open three terminal tabs:
 
 ### Terminal 1: FastAPI Zero-Knowledge Backend (Port 8000)
 ```bash
-cd /home/devil/Projects/Collage_project/CryptaVault
 .venv/bin/uvicorn cryptavault_api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 - **API Docs (Swagger)**: [http://localhost:8000/docs](http://localhost:8000/docs)
 - **Live SSE Telemetry**: [http://localhost:8000/api/metrics/stream](http://localhost:8000/api/metrics/stream)
 
-### Terminal 2: Web Client Application (Port 3000)
+### Terminal 2: Web Portal (Port 5173)
 ```bash
-cd /home/devil/Projects/Collage_project/CryptaVault/packages/web
-npm run dev -- --port 3000
+pnpm --filter @cryptavault/web dev
 ```
-- **Web App URL**: [http://localhost:3000](http://localhost:3000)
+- **Portal URL**: the printed Vite URL, usually [http://localhost:5173](http://localhost:5173)
 
-### Terminal 3: Admin Governance Console (Port 3001)
+### Optional Terminal 3: Standalone Admin Scaffold (Port 3001)
 ```bash
-cd /home/devil/Projects/Collage_project/CryptaVault/packages/admin
-npm run dev -- --port 3001
+pnpm --filter @cryptavault/admin dev -- --port 3001
 ```
-- **Admin Console URL**: [http://localhost:3001](http://localhost:3001)
+- **Admin scaffold URL**: [http://localhost:3001](http://localhost:3001)
+- The deployed admin experience is the in-portal `#/admin` route, which operates on the local browser vault.
 
 ---
 
@@ -90,18 +88,13 @@ Permanently destroy the decrypted sample file using 3-pass overwrite sanitizatio
 
 ---
 
-## 3. Web & Admin Showcase Highlights
+## 3. Web Portal Showcase
 
-1. **Web Client (`packages/web`)**:
-   - Client-side master key derivation using Argon2id.
-   - Live drag-and-drop file encryption with visual chunk progress bar.
-   - Interactive 5-tier adaptive security slider (PERFORMANCE to MAXIMUM).
-   - Real-time cryptographic security badge displaying classical & post-quantum bits.
-   - QR code rendering for one-time timed share links.
-   - Educational AI cryptographic assistant drawer.
+1. Open the portal and create a local vault with a passphrase of at least 10 characters.
+2. Upload a file from **Vault**. The browser compresses when useful, splits into chunks, encrypts each chunk with AES-256-GCM, seals the manifest, and stores ciphertext in IndexedDB.
+3. Open **Catalog** to inspect all 88 algorithms, stable wire IDs, lifecycle gates, and the six profiles from `PERFORMANCE` through `PQ_STRONG` to `MAXIMUM`.
+4. Create a share from the file row. Open the generated link in a private window; the share viewer decrypts without an account or API.
+5. Use **Messages** for local encrypted notes, **Status** to run the browser crypto self-test, **Settings** to rotate the passphrase or export an encrypted backup, and **Admin** for local policy flags and audit export.
+6. Open **Academy** for an implementation-aligned explanation of the zero-knowledge boundary, crypto agility, container framing, and deployment limits.
 
-2. **Admin Console (`packages/admin`)**:
-   - RBAC-enforced tenant management with safe admin impersonation and audit trail.
-   - Live telemetry dashboard powered by Server-Sent Events (`/api/metrics/stream`).
-   - Dynamic runtime feature flag switches (Enable Post-Quantum, Mandatory 2FA, Strict ZK).
-   - Cryptographic tamper log inspector.
+The static portal uses PBKDF2-SHA256 for the vault-level KDF, not Argon2id. The Python engine uses Argon2id. See [portal.md](portal.md) and [security_model.md](security_model.md).

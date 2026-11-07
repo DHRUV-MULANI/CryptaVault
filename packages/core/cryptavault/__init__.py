@@ -2,6 +2,7 @@
 
 # Ensure standard built-in crypto plugins are registered upon importing cryptavault
 import cryptavault.crypto.asymmetric as _asymmetric  # noqa: F401
+import cryptavault.crypto.cascade as _cascade  # noqa: F401
 import cryptavault.crypto.hash as _hash  # noqa: F401
 import cryptavault.crypto.hybrid as _hybrid  # noqa: F401
 import cryptavault.crypto.kdf as _kdf  # noqa: F401

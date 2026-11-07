@@ -39,7 +39,7 @@ jobs:
             -e packages/core \
             -e packages/api \
             -e packages/cli \
-            pytest hypothesis ruff black mypy httpx cmake ninja
+            pytest hypothesis ruff black mypy httpx cmake ninja liboqs-python
 
       - name: Lint with Ruff
         run: |

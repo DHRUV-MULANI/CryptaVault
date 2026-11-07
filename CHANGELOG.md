@@ -5,6 +5,30 @@ The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [1.1.0] - 2026-11-07
+
+### Deployable Portal, Six Profiles, and Crypto Catalog
+
+#### Web portal
+- Replaced the prototype web client with a complete zero-knowledge portal: local vault creation and unlock, file encryption, chunked AES-256-GCM, optional gzip, encrypted manifests, wrapped per-file keys, rename/delete, self-contained share links, encrypted share bundles, share viewer, encrypted local messages, catalog browser, academy, admin console, settings, and diagnostics.
+- Added IndexedDB persistence, passphrase rotation, encrypted backup export/restore, local audit log, auto-lock, policy flags, and browser crypto self-test.
+- Added Tailwind/PostCSS/Vite configuration and hash routing for static hosting.
+- Added automatic GitHub Pages deployment for every push to `main`.
+
+#### Profiles and catalog
+- Added the sixth `PQ_STRONG` profile (80–90 slider) with SHA3-512, hybrid KEM/signatures, and forward secrecy.
+- Updated CLI profile listings, slider resolution, API security badges, and tests for all six bands.
+- Added `/api/crypto/catalog`, `/api/crypto/catalog/{algorithm_id}`, and `/api/crypto/profiles`.
+- Added a generated web catalog snapshot with 88 algorithms across 9 families and stable wire IDs.
+- Added the catalog export script and expanded CORS for the Pages origin.
+
+#### Documentation and quality
+- Rewrote the README with architecture, installation, CLI, portal, and feature documentation.
+- Added portal, CLI, deployment, catalog, container format, security model, and API references.
+- Verified 161 tests, ruff, black, mypy, web/admin typecheck, and monorepo builds.
+
+---
+
 ## [1.0.0] - 2026-09-05
 
 ### Production Release — Full Ecosystem Integration

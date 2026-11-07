@@ -37,6 +37,16 @@ def get_security_badge(profile: str = "BALANCED") -> dict[str, Any]:
             "estimated_security_year": "2050+",
             "badge_color": "#f43f5e",
         }
+    elif prof_upper == "PQ_STRONG":
+        return {
+            "profile": "PQ_STRONG",
+            "classical_bits": 256,
+            "pq_bits": 192,
+            "nist_level": "Category 3",
+            "threat_model": "Post-Quantum Mandatory with Forward Secrecy",
+            "estimated_security_year": "2045+",
+            "badge_color": "#8b5cf6",
+        }
     elif prof_upper == "STRONG":
         return {
             "profile": "STRONG",

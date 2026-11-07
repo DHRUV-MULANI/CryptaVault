@@ -1,23 +1,27 @@
 """Adaptive Cryptographic Engine for CryptaVault.
 
 Resolves abstract security profiles into concrete, hardware-optimized
-pipeline configurations and implements multi-layer encryption for high-assurance workloads.
+pipeline configurations and executes pluggable AEAD (including cascaded
+multi-layer) primitives resolved through the crypto catalog.
 """
 
 from __future__ import annotations
 
 import os
+import secrets
 from dataclasses import dataclass
 
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-
 from cryptavault.adaptive.profiles import SecurityProfile, get_profile
-from cryptavault.crypto.symmetric import (
-    AES256GCM,
-    ChaCha20Poly1305,
-    InvalidTagError,
-)
+from cryptavault.crypto.cascade import CascadeAEAD
+from cryptavault.crypto.catalog import CryptoFamily, catalog
+from cryptavault.crypto.symmetric import InvalidTagError
+from cryptavault.plugins.registry import EncryptionAlgorithm, encryption_registry
+
+
+def resolve_aead(algorithm_id: str) -> EncryptionAlgorithm:
+    """Resolve a registered, catalog-approved AEAD instance by identifier."""
+    spec = catalog.require_usable(algorithm_id, CryptoFamily.SYMMETRIC)
+    return encryption_registry.get(spec.algorithm_id)()
 
 
 @dataclass(frozen=True)
@@ -36,37 +40,22 @@ class PipelineConfig:
 
 
 class MultiLayerEncryptor:
-    """Dual-layer authenticated encryption for MAXIMUM security profile.
+    """Cascaded authenticated encryption for the MAXIMUM security profile.
 
-    Applies inner ChaCha20-Poly1305 followed by outer AES-256-GCM using two
-    cryptographically independent keys derived via HKDF-SHA256 from the master key.
-    Both authentication tags must strictly pass for successful decryption (fail-closed).
+    Applies an inner AEAD followed by an outer AEAD using independent keys
+    derived via HKDF-SHA256. Both authentication tags must strictly pass for
+    successful decryption (fail-closed).
     """
 
-    INNER_INFO = b"cryptavault:multi-layer:inner:chacha20"
-    OUTER_INFO = b"cryptavault:multi-layer:outer:aes256gcm"
+    INNER_ID = "chacha20-poly1305"
+    OUTER_ID = "aes-256-gcm"
 
-    def __init__(self) -> None:
-        self.inner_cipher = ChaCha20Poly1305()
-        self.outer_cipher = AES256GCM()
-
-    def _derive_keys(self, root_key: bytes) -> tuple[bytes, bytes]:
-        """Derive 2 independent 32-byte keys from root key."""
-        inner_key = HKDF(
-            algorithm=hashes.SHA256(),
-            length=32,
-            salt=None,
-            info=self.INNER_INFO,
-        ).derive(root_key)
-
-        outer_key = HKDF(
-            algorithm=hashes.SHA256(),
-            length=32,
-            salt=None,
-            info=self.OUTER_INFO,
-        ).derive(root_key)
-
-        return inner_key, outer_key
+    def __init__(self, inner: str = INNER_ID, outer: str = OUTER_ID) -> None:
+        inner_spec = catalog.require_usable(inner, CryptoFamily.SYMMETRIC)
+        outer_spec = catalog.require_usable(outer, CryptoFamily.SYMMETRIC)
+        self.inner_id = inner_spec.algorithm_id
+        self.outer_id = outer_spec.algorithm_id
+        self._cascade = CascadeAEAD((self.inner_id, self.outer_id))
 
     def encrypt(
         self,
@@ -74,22 +63,8 @@ class MultiLayerEncryptor:
         plaintext: bytes,
         aad: bytes = b"",
     ) -> tuple[bytes, bytes]:
-        """Perform dual-layer encryption: inner ChaCha20, outer AES-256-GCM.
-
-        Returns (outer_nonce, multi_layer_envelope).
-        Envelope format: [12-byte inner_nonce][outer_ciphertext (encrypting inner_ciphertext)]
-        """
-        inner_key, outer_key = self._derive_keys(root_key)
-
-        # 1. Inner encryption (ChaCha20-Poly1305)
-        inner_nonce, inner_ct = self.inner_cipher.encrypt_auto_nonce(inner_key, plaintext, aad=aad)
-
-        # 2. Outer encryption (AES-256-GCM)
-        outer_nonce, outer_ct = self.outer_cipher.encrypt_auto_nonce(outer_key, inner_ct, aad=aad)
-
-        # Combine: inner_nonce (12 bytes) + outer_ciphertext
-        payload = inner_nonce + outer_ct
-        return outer_nonce, payload
+        """Perform cascaded encryption, returning (outer_nonce, envelope)."""
+        return self._cascade.encrypt_auto_nonce(root_key, plaintext, aad=aad)
 
     def decrypt(
         self,
@@ -98,20 +73,8 @@ class MultiLayerEncryptor:
         payload: bytes,
         aad: bytes = b"",
     ) -> bytes:
-        """Reverse dual-layer encryption: outer AES-256-GCM first, then inner ChaCha20-Poly1305."""
-        if len(payload) < 28:  # 12-byte inner nonce + minimum 16-byte tag
-            raise InvalidTagError("Multi-layer ciphertext payload is truncated")
-
-        inner_nonce = payload[:12]
-        outer_ct = payload[12:]
-
-        inner_key, outer_key = self._derive_keys(root_key)
-
-        # 1. Outer decryption
-        inner_ct = self.outer_cipher.decrypt(outer_key, outer_nonce, outer_ct, aad=aad)
-
-        # 2. Inner decryption
-        return self.inner_cipher.decrypt(inner_key, inner_nonce, inner_ct, aad=aad)
+        """Reverse cascaded encryption, verifying every layer tag."""
+        return self._cascade.decrypt(root_key, outer_nonce, payload, aad=aad)
 
 
 class AdaptiveEngine:
@@ -123,8 +86,6 @@ class AdaptiveEngine:
 
     def __init__(self) -> None:
         self._multi_layer = MultiLayerEncryptor()
-        self._aes = AES256GCM()
-        self._chacha = ChaCha20Poly1305()
 
     def resolve(
         self,
@@ -139,18 +100,12 @@ class AdaptiveEngine:
             else get_profile(profile_or_name)
         )
 
-        # Dynamic chunk scaling based on file size:
-        # < 100MB: default profile chunk size (e.g. 4MB)
-        # 100MB - 1GB: at least 4MB
-        # 1GB - 10GB: at least 8MB
-        # > 10GB: 16MB
         chunk_size = profile.chunk_size_bytes
         if file_size_bytes >= 10 * 1024 * 1024 * 1024:
             chunk_size = max(chunk_size, 16 * 1024 * 1024)
         elif file_size_bytes >= 1024 * 1024 * 1024:
             chunk_size = max(chunk_size, 8 * 1024 * 1024)
 
-        # Parallel worker allocation based on CPU
         detected_cpus = cpu_count or os.cpu_count() or 4
         if profile.level.value == "PERFORMANCE":
             workers = max(2, min(detected_cpus, 8))
@@ -178,13 +133,13 @@ class AdaptiveEngine:
         plaintext: bytes,
         aad: bytes = b"",
     ) -> tuple[bytes, bytes]:
-        """Encrypt a block using configured cipher or multi-layer pipeline."""
+        """Encrypt a block using the configured cipher or cascade pipeline."""
         if config.multi_layer:
             return self._multi_layer.encrypt(key, plaintext, aad=aad)
 
-        if config.symmetric_cipher.lower() == "aes-256-gcm":
-            return self._aes.encrypt_auto_nonce(key, plaintext, aad=aad)
-        return self._chacha.encrypt_auto_nonce(key, plaintext, aad=aad)
+        cipher = resolve_aead(config.symmetric_cipher)
+        nonce = secrets.token_bytes(cipher.nonce_size_bytes)
+        return nonce, cipher.encrypt(key, nonce, plaintext, aad)
 
     def decrypt_block(
         self,
@@ -194,10 +149,18 @@ class AdaptiveEngine:
         ciphertext: bytes,
         aad: bytes = b"",
     ) -> bytes:
-        """Decrypt a block using configured cipher or multi-layer pipeline."""
+        """Decrypt a block using the configured cipher or cascade pipeline."""
         if config.multi_layer:
             return self._multi_layer.decrypt(key, nonce, ciphertext, aad=aad)
 
-        if config.symmetric_cipher.lower() == "aes-256-gcm":
-            return self._aes.decrypt(key, nonce, ciphertext, aad=aad)
-        return self._chacha.decrypt(key, nonce, ciphertext, aad=aad)
+        cipher = resolve_aead(config.symmetric_cipher)
+        return cipher.decrypt(key, nonce, ciphertext, aad)
+
+
+__all__ = [
+    "AdaptiveEngine",
+    "InvalidTagError",
+    "MultiLayerEncryptor",
+    "PipelineConfig",
+    "resolve_aead",
+]

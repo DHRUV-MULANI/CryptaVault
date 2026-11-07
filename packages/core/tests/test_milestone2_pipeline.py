@@ -17,12 +17,13 @@ from cryptavault.pipeline.orchestrator import PipelineOrchestrator
 
 
 def test_adaptive_slider_and_engine() -> None:
-    """Verify slider maps to 5 tiers and engine resolves configuration."""
+    """Verify slider maps to 6 tiers and engine resolves configuration."""
     assert resolve_slider(10).level.value == "PERFORMANCE"
     assert resolve_slider(30).level.value == "STANDARD"
     assert resolve_slider(50).level.value == "BALANCED"
     assert resolve_slider(70).level.value == "STRONG"
-    assert resolve_slider(90).level.value == "MAXIMUM"
+    assert resolve_slider(85).level.value == "PQ_STRONG"
+    assert resolve_slider(95).level.value == "MAXIMUM"
 
     engine = AdaptiveEngine()
     config = engine.resolve("MAXIMUM", file_size_bytes=2 * 1024 * 1024 * 1024)

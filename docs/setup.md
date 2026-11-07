@@ -1,6 +1,6 @@
 # CryptaVault Development Environment Setup
 
-This document provides setup instructions for building and running the CryptaVault workspace, including the native post-quantum cryptography engine (`liboqs`).
+This document covers local setup for the Python engine, CLI, API, and static web portal. For the complete command reference see [cli.md](cli.md); for portal usage see [portal.md](portal.md); for deployment see [deployment.md](deployment.md).
 
 ---
 
@@ -34,11 +34,11 @@ This document provides setup instructions for building and running the CryptaVau
    ```bash
    uv pip install --python .venv/bin/python liboqs-python
    ```
-   automatically compiles native `liboqs` with AVX2 and hardware acceleration.
+   installs the Python bindings and may compile native `liboqs` when a matching shared library is not already present. Verify with `.venv/bin/python -c "import oqs; print(oqs.get_enabled_kem_mechanisms()[:3])"`.
    
    - **KEM Verified**: Kyber768 / ML-KEM-768 (32-byte shared secret, 1088-byte ciphertext)
    - **Signature Verified**: ML-DSA-65 / Dilithium3 (1952-byte public key, 3309-byte signature)
-   - **KAT Baseline**: [pq_baseline.json](file:///home/devil/Projects/Collage_project/CryptaVault/packages/core/tests/kat/pq_baseline.json)
+   - **KAT Baseline**: [pq_baseline.json](../packages/core/tests/kat/pq_baseline.json)
 
 ---
 
@@ -54,9 +54,20 @@ This document provides setup instructions for building and running the CryptaVau
    npx -y pnpm run typecheck
    ```
 
-3. **Build Web Client & Admin Console**:
+3. **Build the web portal and standalone admin scaffold**:
    ```bash
    npx -y pnpm run build
+   ```
+
+4. **Run the portal locally**:
+   ```bash
+   pnpm --filter @cryptavault/web dev
+   ```
+   Open the printed URL (usually `http://localhost:5173`). No API is required for the local vault, file encryption, share viewer, messages, catalog, or settings.
+
+5. **Production Pages build**:
+   ```bash
+   VITE_BASE=/CryptaVault/ pnpm --filter @cryptavault/web build
    ```
 
 ---
@@ -70,12 +81,20 @@ This document provides setup instructions for building and running the CryptaVau
    SUPABASE_ANON_KEY="<your-anon-key>"
    ```
 2. Apply migrations in your Supabase SQL Editor:
-   - Run [0001_init.sql](file:///home/devil/Projects/Collage_project/CryptaVault/supabase/migrations/0001_init.sql)
-   - Run [0002_rls.sql](file:///home/devil/Projects/Collage_project/CryptaVault/supabase/migrations/0002_rls.sql)
+   - Run [0001_init.sql](../supabase/migrations/0001_init.sql)
+   - Run [0002_rls.sql](../supabase/migrations/0002_rls.sql)
 
 ---
 
-## 5. Containerized Development (`Dockerfile.dev`)
+## 5. Run the API
+
+```bash
+.venv/bin/uvicorn cryptavault_api.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+OpenAPI: `http://127.0.0.1:8000/docs`. The static portal does not require this service.
+
+## 6. Containerized Development (`Dockerfile.dev`)
 
 If you prefer building in a clean Docker container:
 ```bash

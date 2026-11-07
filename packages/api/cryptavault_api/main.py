@@ -19,6 +19,7 @@ from cryptavault_api.middleware.rate_limit import RateLimitMiddleware
 from cryptavault_api.routes.admin import router as admin_router
 from cryptavault_api.routes.ai import router as ai_router
 from cryptavault_api.routes.audit import router as audit_router
+from cryptavault_api.routes.crypto import router as crypto_router
 from cryptavault_api.routes.metrics import router as metrics_router
 from cryptavault_api.routes.shares import router as shares_router
 from cryptavault_api.routes.storage import router as storage_router
@@ -40,14 +41,22 @@ app = FastAPI(
 )
 
 # CORS middleware for Web Client and Admin Console
+_DEFAULT_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:3001",
+    "https://dhruv-mulani.github.io",
+]
+_extra_origins = [
+    origin.strip()
+    for origin in os.getenv("CRYPTAVAULT_CORS_ORIGINS", "").split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:3001",
-    ],
+    allow_origins=[*_DEFAULT_ORIGINS, *_extra_origins],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -65,6 +74,7 @@ app.include_router(audit_router)
 app.include_router(admin_router)
 app.include_router(metrics_router)
 app.include_router(ai_router)
+app.include_router(crypto_router)
 
 
 @app.get("/health")

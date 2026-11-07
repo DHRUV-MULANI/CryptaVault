@@ -1,11 +1,12 @@
 """Security Profile Definitions for CryptaVault Adaptive Cryptographic Engine.
 
-Defines the 5 core adaptive security profiles:
+Defines the 6 core adaptive security profiles:
 - PERFORMANCE (0–20% slider): Maximizes throughput on constrained devices with classical high-speed primitives.
 - STANDARD (20–40% slider): Lightweight cloud storage with standard NIST compliance.
 - BALANCED (40–60% slider, Default): Optimal trade-off between modern security, compliance, and speed.
 - STRONG (60–80% slider): Heightened classical margin with mandatory post-quantum hybrid defense.
-- MAXIMUM (80–100% slider): Post-quantum mandatory, dual-layer AEAD, maximum memory-hard KDF, and forward secrecy.
+- PQ-STRONG (80–90% slider): Post-quantum mandatory with forward secrecy and larger chunks.
+- MAXIMUM (90–100% slider): Post-quantum mandatory, dual-layer AEAD, maximum memory-hard KDF, and forward secrecy.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ class SecurityLevel(str, Enum):
     STANDARD = "STANDARD"
     BALANCED = "BALANCED"
     STRONG = "STRONG"
+    PQ_STRONG = "PQ_STRONG"
     MAXIMUM = "MAXIMUM"
 
 
@@ -144,6 +146,26 @@ PROFILE_STRONG = SecurityProfile(
     multi_layer_encryption=False,
 )
 
+PROFILE_PQ_STRONG = SecurityProfile(
+    name="Post-Quantum Strong",
+    level=SecurityLevel.PQ_STRONG,
+    description="Post-quantum mandatory tier with forward secrecy, hybrid KEM/signatures, and SHA3-512.",
+    symmetric_cipher="aes-256-gcm",
+    hash_algorithm="sha3-512",
+    signature_algorithm="hybrid-sig-pq",
+    kem_algorithm="hybrid-kem-pq",
+    kdf_memory_cost_kib=98304,  # 96 MiB
+    kdf_time_cost=5,
+    kdf_parallelism=4,
+    compression_algorithm="zstd",
+    chunk_size_bytes=8 * 1024 * 1024,  # 8 MiB
+    post_quantum_protected=True,
+    metadata_encryption=True,
+    audit_logging=True,
+    forward_secrecy=True,
+    multi_layer_encryption=False,
+)
+
 PROFILE_MAXIMUM = SecurityProfile(
     name="Maximum Post-Quantum Security",
     level=SecurityLevel.MAXIMUM,
@@ -169,6 +191,7 @@ _PROFILES_BY_LEVEL: dict[SecurityLevel, SecurityProfile] = {
     SecurityLevel.STANDARD: PROFILE_STANDARD,
     SecurityLevel.BALANCED: PROFILE_BALANCED,
     SecurityLevel.STRONG: PROFILE_STRONG,
+    SecurityLevel.PQ_STRONG: PROFILE_PQ_STRONG,
     SecurityLevel.MAXIMUM: PROFILE_MAXIMUM,
 }
 
@@ -202,7 +225,8 @@ def resolve_slider(percentage: float) -> SecurityProfile:
     - 20 <= pct < 40: STANDARD
     - 40 <= pct < 60: BALANCED
     - 60 <= pct < 80: STRONG
-    - 80 <= pct <= 100: MAXIMUM
+    - 80 <= pct < 90: PQ_STRONG
+    - 90 <= pct <= 100: MAXIMUM
     """
     if percentage < 0.0 or percentage > 100.0:
         raise ValueError(f"Slider percentage must be between 0 and 100, got {percentage}")
@@ -215,6 +239,8 @@ def resolve_slider(percentage: float) -> SecurityProfile:
         return PROFILE_BALANCED
     if percentage < 80.0:
         return PROFILE_STRONG
+    if percentage < 90.0:
+        return PROFILE_PQ_STRONG
     return PROFILE_MAXIMUM
 
 
