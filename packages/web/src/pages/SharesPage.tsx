@@ -61,6 +61,7 @@ export default function SharesPage(): JSX.Element {
   async function createShare(e: React.FormEvent) {
     e.preventDefault();
     if (!key || !fileId) return;
+    if (pin.trim() && !/^\d{8}$/.test(pin.trim())) { notify('PIN must be exactly 8 digits', 'error'); return; }
     setBusy(true);
     try {
       const expiresAt = new Date(Date.now() + ttlHours * 3600_000).toISOString();

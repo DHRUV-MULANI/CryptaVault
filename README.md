@@ -63,7 +63,7 @@ The dynamic web/remote path mirrors the profile names, descriptions, and chunk s
 | Dynamic auth | Local accounts, PBKDF2 verifier, JWT sessions, auto-lock, profile updates | [docs/api.md](docs/api.md) |
 | Workspaces | Owner/editor/viewer/admin roles, members, quotas, per-workspace storage target | [docs/api.md](docs/api.md) |
 | Encrypted vault | Chunked client-side upload, immutable versions, rename, trash/restore, permanent delete | [docs/portal.md](docs/portal.md) |
-| Secure sharing | Server-enforced expiry/uses/revocation, passphrase shares, web-compatible manifest links | [docs/api.md](docs/api.md) |
+| Secure sharing | Server-enforced expiry/uses/revocation, passphrase, recipient email, 8-digit PIN, QR, link regeneration, received-shares inbox | [docs/api.md](docs/api.md) |
 | Live dashboard | User/admin aggregates, storage mix, quota, recent files, activity counters | [docs/portal.md](docs/portal.md) |
 | Admin console | Role/quota/suspension controls, feature flags, storage health tests, system health | [docs/portal.md](docs/portal.md) |
 | Remote CLI | Login/register, workspaces, upload/download, versions, trash, shares, share decryption | [docs/cli.md](docs/cli.md) |
@@ -157,8 +157,8 @@ The accounts are seeded by the API startup path when `CRYPTAVAULT_SEED_DEMO=true
 2. **Dashboard** shows live quota, storage mix, workspace totals, and decrypted recent files.
 3. **Vault** uploads a file: it is compressed when useful, chunked, encrypted with a fresh key, and uploaded as ciphertext. The matching manifest is sealed with your master key.
 4. **Versions** adds an immutable version; **Trash** restores or permanently deletes.
-5. **Share** creates a server-enforced link with expiry/use limits and an optional passphrase. The generated manifest link is stored in this browser under `cryptavault.share.link.{token}` because the server never receives decryptable URL material.
-6. **Shares** lists server shares and local links; revoke invalidates future API downloads.
+5. **Share** creates a server-enforced link with expiry/use limits, optional passphrase, optional recipient email, and an 8-digit PIN (auto-assigned if omitted). The decryption key stays in the URL fragment; the server never receives it.
+6. **Shares** lists owned shares and "Shared with me" inbox; owner can copy link/QR, change PIN, regenerate link, or revoke. Recipient-email users bypass PIN when logged in.
 7. **Workspaces** manages members, roles, quotas, and the active workspace.
 8. **Admin** is visible to admin accounts and controls users, quotas, suspension, flags, storage tests, and health.
 9. **Status** checks `/health`, `/ready`, storage targets, browser crypto support, and the AES-GCM self-test.
@@ -167,10 +167,10 @@ The accounts are seeded by the API startup path when `CRYPTAVAULT_SEED_DEMO=true
 Public share links use the form:
 
 ```text
-http://localhost:3000/#/s/<token>?m=<encrypted-manifest>&k=<raw-share-key>
+http://localhost:3000/#/s/<token>?k=<raw-share-key>
 ```
 
-Passphrase-protected links omit `k`; the recipient enters the share passphrase. Legacy static `#/share?d=...` links are no longer decryptable by the dynamic viewer because they need a self-contained container manifest.
+The key fragment is client-only. PIN/password are server-enforced access controls; recipient-email users skip PIN when logged in.
 
 ---
 

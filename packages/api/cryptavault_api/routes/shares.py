@@ -184,6 +184,12 @@ def list_received_shares(
     )
     results: list[dict[str, Any]] = []
     for share in shares:
+        if share.revoked:
+            continue
+        if share.expires_at and datetime.now(UTC) > _aware(share.expires_at):
+            continue
+        if share.uses >= share.max_uses:
+            continue
         file = db.get(FileObject, share.file_id)
         if file is None or file.deleted_at is not None:
             continue

@@ -93,9 +93,12 @@ systemctl status cryptavault-api cryptavault-web cloudflared --no-pager
 - Trash = soft delete; Restore from trash; Permanent delete removes ciphertext and DB records.
 
 ### Sharing
-- Create server-enforced share links with expiry, max uses, optional password, revocation.
-- Share link includes decryption key in URL fragment (`#...k=...`) so server does not receive key.
+- Create server-enforced share links with expiry, max uses, optional password, revocation, optional recipient email, and 8-digit PIN.
+- PIN is auto-assigned if omitted; owner can change PIN or regenerate link. PIN is stored as server-side hash (access control), not a file encryption key.
+- Recipient email: when that user is logged in, PIN is bypassed; other users must enter PIN.
+- Share link includes decryption key in URL fragment (`#...k=...`) so server does not receive key. QR code is generated for sharing.
 - "Share all" can create shares for all files in current workspace.
+- "Shared with me" tab lists shares addressed to the logged-in user's email.
 
 ### Workspaces
 - Create/select workspaces.
