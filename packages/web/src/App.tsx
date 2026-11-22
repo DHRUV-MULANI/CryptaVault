@@ -58,7 +58,7 @@ function Shell(): JSX.Element {
   const { status } = useVault();
   const [location] = useLocation();
 
-  if (location.startsWith('/share') || location.startsWith('/s/')) {
+  if (location === '/share' || location.startsWith('/share/') || location.startsWith('/s/')) {
     return <ShareViewer />;
   }
 
