@@ -23,6 +23,9 @@ wheels/
 .installed.cfg
 *.egg
 
+# Local runtime data
+/data/
+
 # Testing & Linting
 .pytest_cache/
 .mypy_cache/
@@ -43,6 +46,12 @@ packages/web/dist/
 packages/admin/dist/
 packages/wasm/build/
 packages/wasm/dist/
+
+# Local runtime data
+data/
+storage/
+supabase/.temp/
+supabase/.branches/
 
 # Environment, Keys & Secrets
 .env

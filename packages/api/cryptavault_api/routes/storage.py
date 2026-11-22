@@ -1,160 +1,162 @@
-"""Zero-Knowledge multi-backend cloud storage routes (Supabase & Cloudflare R2).
-
-Zero-Knowledge Invariant: The storage router only ever accepts and streams CIPHERTEXT.
-Plaintext data and private encryption keys are NEVER transmitted to these endpoints.
-"""
+"""Storage target management and health endpoints."""
 
 from __future__ import annotations
 
-import io
-from datetime import UTC, datetime
 from typing import Any
 
-from cryptavault.storage.registry import resolve_storage
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from cryptavault_api.deps.supabase import AuthenticatedUser, get_current_user
+from cryptavault_api.db import get_db
+from cryptavault_api.deps.supabase import AuthenticatedUser, get_admin_user, get_current_user
+from cryptavault_api.models import FileVersion, StorageTarget
+from cryptavault_api.secrets import encrypt_config
+from cryptavault_api.serializers import target_public
+from cryptavault_api.services.policy import CLOUD_TARGET_KINDS, require_flag
+from cryptavault_api.services.storage import test_target
 
 router = APIRouter(prefix="/api/storage", tags=["storage"])
 
-# Metadata catalog of stored encrypted files in cloud buckets
-_CLOUD_FILE_CATALOG: list[dict[str, Any]] = []
+VALID_KINDS = {"local", "s3", "gdrive", "dropbox", "onedrive"}
 
 
-class StorageFileInfoResponse(BaseModel):
-    file_id: str
-    filename: str
-    encrypted_size_bytes: int
-    storage_backend: str  # "supabase" or "r2"
-    remote_path: str
-    public_url: str | None = None
-    uploaded_at_iso: str
-    profile_level: str = "BALANCED"
+class CreateTargetRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    kind: str = Field(min_length=2, max_length=20)
+    config: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+    is_default: bool = False
 
 
-@router.post("/upload", response_model=StorageFileInfoResponse)
-async def upload_encrypted_file(
-    file: UploadFile = File(..., description="Encrypted ciphertext payload (.vault or .enc)"),
-    backend: str = Form(default="supabase", description="Target cloud backend: 'supabase' or 'r2'"),
-    profile_level: str = Form(default="BALANCED", description="Security profile tier"),
-    custom_domain: str | None = Form(
-        default=None, description="Optional custom domain or Cloudflare domain"
-    ),
-    user: AuthenticatedUser = Depends(get_current_user),
-) -> StorageFileInfoResponse:
-    """Upload client-side encrypted ciphertext directly to Supabase Storage or Cloudflare R2."""
-    backend_clean = backend.lower().strip()
-    if backend_clean not in ("supabase", "r2"):
+class UpdateTargetRequest(BaseModel):
+    config: dict[str, Any] | None = None
+    enabled: bool | None = None
+    is_default: bool | None = None
+
+
+def _validate_kind(kind: str) -> str:
+    clean = kind.lower().strip()
+    if clean not in VALID_KINDS:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Supported storage backends are 'supabase' and 'r2'.",
+            status_code=422,
+            detail=f"Kind must be one of: {', '.join(sorted(VALID_KINDS))}.",
         )
+    return clean
 
-    file_bytes = await file.read()
-    size_bytes = len(file_bytes)
-    filename = file.filename or "encrypted_file.vault"
-    remote_path = f"users/{user.id}/{filename}"
 
-    target_uri = f"{backend_clean}://vaults/{remote_path}"
-    public_url: str | None = None
+def _clear_defaults(db: Session, name: str | None = None) -> None:
+    for target in db.scalars(select(StorageTarget)).all():
+        if target.name != name:
+            target.is_default = False
 
-    try:
-        connector = resolve_storage(target_uri)
-        # Set custom domain if provided
-        if custom_domain and hasattr(connector, "custom_domain"):
-            connector.custom_domain = custom_domain.rstrip("/")
 
-        connector.authenticate()
-        res_url = connector.upload(io.BytesIO(file_bytes), remote_path, size=size_bytes)
-        public_url = res_url
-    except Exception:
-        # Fallback to recorded cloud metadata if remote service creds are unconfigured in dev
-        if custom_domain:
-            public_url = f"{custom_domain.rstrip('/')}/{remote_path}"
-        else:
-            public_url = f"{backend_clean}://vaults/{remote_path}"
+@router.get("/targets")
+def list_targets(
+    current: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    targets = list(db.scalars(select(StorageTarget).order_by(StorageTarget.name)).all())
+    return [target_public(target) for target in targets]
 
-    file_id = f"{user.id}_{filename}"
-    uploaded_at = datetime.now(UTC).isoformat()
 
-    record = {
-        "file_id": file_id,
-        "filename": filename,
-        "encrypted_size_bytes": size_bytes,
-        "storage_backend": backend_clean,
-        "remote_path": remote_path,
-        "public_url": public_url,
-        "uploaded_at_iso": uploaded_at,
-        "profile_level": profile_level,
-        "owner_id": user.id,
-    }
-
-    # Deduplicate in catalog
-    global _CLOUD_FILE_CATALOG
-    _CLOUD_FILE_CATALOG = [f for f in _CLOUD_FILE_CATALOG if f["file_id"] != file_id]
-    _CLOUD_FILE_CATALOG.insert(0, record)
-
-    return StorageFileInfoResponse(
-        file_id=file_id,
-        filename=filename,
-        encrypted_size_bytes=size_bytes,
-        storage_backend=backend_clean,
-        remote_path=remote_path,
-        public_url=public_url,
-        uploaded_at_iso=uploaded_at,
-        profile_level=profile_level,
+@router.post("/targets", status_code=status.HTTP_201_CREATED)
+def create_target(
+    payload: CreateTargetRequest,
+    admin: AuthenticatedUser = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    name = payload.name.strip()
+    if db.get(StorageTarget, name) is not None:
+        raise HTTPException(status_code=409, detail="A storage target with that name exists.")
+    kind = _validate_kind(payload.kind)
+    if kind in CLOUD_TARGET_KINDS:
+        require_flag(
+            db,
+            "enable_cloud_connectors",
+            "Cloud storage connectors are disabled by the administrator.",
+        )
+    if payload.is_default:
+        _clear_defaults(db)
+    target = StorageTarget(
+        name=name,
+        kind=kind,
+        config_json=encrypt_config(payload.config),
+        enabled=payload.enabled,
+        is_default=payload.is_default,
     )
+    db.add(target)
+    db.commit()
+    db.refresh(target)
+    return target_public(target)
 
 
-@router.get("/files", response_model=list[StorageFileInfoResponse])
-def list_encrypted_files(
-    user: AuthenticatedUser = Depends(get_current_user),
-) -> list[StorageFileInfoResponse]:
-    """List all encrypted vault files stored in Supabase Storage or Cloudflare R2 for the current user."""
-    return [
-        StorageFileInfoResponse(
-            file_id=r["file_id"],
-            filename=r["filename"],
-            encrypted_size_bytes=r["encrypted_size_bytes"],
-            storage_backend=r["storage_backend"],
-            remote_path=r["remote_path"],
-            public_url=r.get("public_url"),
-            uploaded_at_iso=r["uploaded_at_iso"],
-            profile_level=r.get("profile_level", "BALANCED"),
+@router.patch("/targets/{name}")
+def update_target(
+    name: str,
+    payload: UpdateTargetRequest,
+    admin: AuthenticatedUser = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    target = db.get(StorageTarget, name)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Storage target not found.")
+    if target.kind in CLOUD_TARGET_KINDS:
+        require_flag(
+            db,
+            "enable_cloud_connectors",
+            "Cloud storage connectors are disabled by the administrator.",
         )
-        for r in _CLOUD_FILE_CATALOG
-        if r.get("owner_id") == user.id or user.role == "admin"
-    ]
+    if payload.config is not None:
+        target.config_json = encrypt_config(payload.config)
+    if payload.enabled is not None:
+        target.enabled = payload.enabled
+    if payload.is_default:
+        _clear_defaults(db, name)
+        target.is_default = True
+        target.enabled = True
+    db.commit()
+    db.refresh(target)
+    return target_public(target)
 
 
-@router.get("/download/{file_id}")
-def download_encrypted_file(
-    file_id: str,
-    user: AuthenticatedUser = Depends(get_current_user),
-) -> StreamingResponse:
-    """Download encrypted ciphertext from cloud storage for client-side decryption."""
-    target_record = next((f for f in _CLOUD_FILE_CATALOG if f["file_id"] == file_id), None)
-    if not target_record:
+@router.delete("/targets/{name}")
+def delete_target(
+    name: str,
+    admin: AuthenticatedUser = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    target = db.get(StorageTarget, name)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Storage target not found.")
+    in_use = db.scalar(select(FileVersion).where(FileVersion.storage_target == name).limit(1))
+    if in_use is not None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Encrypted file not found."
+            status_code=409,
+            detail="Storage target still contains files. Move or delete them first.",
         )
+    db.delete(target)
+    db.commit()
+    return {"status": "deleted", "name": name}
 
-    backend = target_record["storage_backend"]
-    remote_path = target_record["remote_path"]
-    target_uri = f"{backend}://vaults/{remote_path}"
 
-    try:
-        connector = resolve_storage(target_uri)
-        connector.authenticate()
-        stream = connector.download(remote_path)
-    except Exception:
-        # Generate mock stream if testing
-        stream = io.BytesIO(b"CVLT\x01\x00\x03\x01MOCK_CIPHERTEXT_FOR_OFFLINE_TEST")
+@router.post("/targets/{name}/test")
+def test_storage_target(
+    name: str,
+    admin: AuthenticatedUser = Depends(get_admin_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    target = db.get(StorageTarget, name)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Storage target not found.")
+    return test_target(target)
 
-    return StreamingResponse(
-        stream,
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{target_record["filename"]}"'},
-    )
+
+@router.get("/health")
+def storage_health(
+    current: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    targets = list(db.scalars(select(StorageTarget).order_by(StorageTarget.name)).all())
+    return [test_target(target) for target in targets]

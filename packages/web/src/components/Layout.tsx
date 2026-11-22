@@ -4,12 +4,13 @@ import {
   Activity,
   BookOpen,
   Boxes,
+  Building2,
   FolderLock,
   Gauge,
   GraduationCap,
   LayoutDashboard,
   Lock,
-  MessageSquareLock,
+  LogOut,
   Settings,
   Share2,
   ShieldCheck,
@@ -25,7 +26,7 @@ const NAV = [
       { href: '/', label: 'Overview', icon: LayoutDashboard },
       { href: '/vault', label: 'Encrypted vault', icon: FolderLock },
       { href: '/shares', label: 'Secure shares', icon: Share2 },
-      { href: '/messages', label: 'Messages', icon: MessageSquareLock },
+      { href: '/workspaces', label: 'Workspaces', icon: Building2 },
     ],
   },
   {
@@ -54,7 +55,7 @@ function Brand(): JSX.Element {
       <span>
         <span className="block text-sm font-semibold tracking-tight text-white">CryptaVault</span>
         <span className="block text-[10px] uppercase tracking-[0.2em] text-slate-500">
-          Zero-knowledge storage
+          Dynamic zero-knowledge storage
         </span>
       </span>
     </Link>
@@ -63,7 +64,7 @@ function Brand(): JSX.Element {
 
 export default function Layout({ children }: { children: ReactNode }): JSX.Element {
   const [location] = useLocation();
-  const { settings, meta, lock } = useVault();
+  const { settings, user, currentWorkspace, lock, logout } = useVault();
   const profile = getProfile(settings.defaultProfile);
   const version = import.meta.env.VITE_COMMIT ?? 'dev';
 
@@ -77,10 +78,10 @@ export default function Layout({ children }: { children: ReactNode }): JSX.Eleme
           </span>
           <div className="min-w-0">
             <div className="truncate text-xs font-semibold text-white">
-              {settings.displayName || 'Local vault'}
+              {settings.displayName || user?.email || 'User'}
             </div>
-            <div className="text-[10px] uppercase tracking-wider text-slate-500">
-              Unlocked · {profile.level.replace('_', '-')}
+            <div className="truncate text-[10px] uppercase tracking-wider text-slate-500">
+              {currentWorkspace?.name ?? 'No workspace'} · {profile.level.replace('_', '-')}
             </div>
           </div>
         </div>
@@ -93,8 +94,7 @@ export default function Layout({ children }: { children: ReactNode }): JSX.Eleme
               </div>
               <div className="space-y-1">
                 {group.items.map((item) => {
-                  const active =
-                    item.href === '/' ? location === '/' : location.startsWith(item.href);
+                  const active = item.href === '/' ? location === '/' : location.startsWith(item.href);
                   return (
                     <Link
                       key={item.href}
@@ -123,14 +123,19 @@ export default function Layout({ children }: { children: ReactNode }): JSX.Eleme
               Client-side encryption
             </div>
             <p className="mt-1.5 text-[10px] leading-relaxed text-slate-500">
-              Keys are derived in this tab and never uploaded. The vault is stored in IndexedDB.
+              Keys are derived in this tab. The server stores ciphertext, wrapped keys, and metadata only.
             </p>
           </div>
-          <button className="btn-secondary w-full justify-center !py-2 !text-xs" onClick={lock}>
-            <Lock className="h-3.5 w-3.5" /> Lock vault
-          </button>
+          <div className="grid grid-cols-2 gap-2">
+            <button className="btn-secondary justify-center !py-2 !text-xs" onClick={lock}>
+              <Lock className="h-3.5 w-3.5" /> Lock
+            </button>
+            <button className="btn-secondary justify-center !py-2 !text-xs" onClick={() => void logout()}>
+              <LogOut className="h-3.5 w-3.5" /> Logout
+            </button>
+          </div>
           <div className="flex items-center justify-between px-1 text-[10px] text-slate-600">
-            <span>v1.0.0 · {version.slice(0, 7)}</span>
+            <span>v2.0.0 · {version.slice(0, 7)}</span>
             <a
               className="inline-flex items-center gap-1 hover:text-slate-400"
               href="https://github.com/DHRUV-MULANI/CryptaVault"
@@ -149,13 +154,13 @@ export default function Layout({ children }: { children: ReactNode }): JSX.Eleme
             <Brand />
             <div className="flex items-center gap-2">
               <span className="badge badge-emerald">{profile.level.replace('_', ' ')}</span>
-              <button className="btn-ghost !p-2" onClick={lock} aria-label="Lock vault">
+              <button className="btn-ghost !p-2" onClick={lock} aria-label="Lock">
                 <Lock className="h-4 w-4" />
               </button>
             </div>
           </div>
           <nav className="flex gap-1 overflow-x-auto px-3 pb-2 scroll-thin">
-            {NAV.flatMap((group) => group.items).map((item) => {
+            {NAV.flatMap((g) => g.items).map((item) => {
               const active = item.href === '/' ? location === '/' : location.startsWith(item.href);
               return (
                 <Link
@@ -179,10 +184,9 @@ export default function Layout({ children }: { children: ReactNode }): JSX.Eleme
         </main>
         <footer className="mx-auto flex w-full max-w-[1400px] flex-wrap items-center justify-between gap-2 px-4 pb-6 text-[11px] text-slate-600 sm:px-6 lg:px-8">
           <span>
-            CryptaVault · zero-knowledge boundary enforced · vault created{' '}
-            {meta ? new Date(meta.createdAt).toLocaleDateString() : '—'}
+            CryptaVault · zero-knowledge boundary enforced · {user?.email ?? 'not signed in'}
           </span>
-          <span className="mono">AES-GCM · PBKDF2-SHA256 · IndexedDB</span>
+          <span className="mono">AES-GCM · PBKDF2-SHA256 · API-backed</span>
         </footer>
       </div>
     </div>

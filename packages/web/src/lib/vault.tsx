@@ -8,41 +8,20 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { recordAudit } from './audit';
+import { api, getStoredWorkspaceId, getToken, setStoredWorkspaceId, setToken, type ApiMe, type ApiUser, type ApiVault, type ApiWorkspace } from './api';
 import {
   KDF_ITERATIONS,
   VERIFIER_PLAINTEXT,
-  deriveMasterKey,
+  b64ToBytes,
   bytesToB64,
-  importAesKey,
-  openJson,
-  randomBytes,
-  seal,
-  sealJson,
-  unwrapRawKey,
-  utf8,
-  wrapRawKey,
+  deriveMasterKey,
   fromUtf8,
   open,
+  randomBytes,
+  seal,
+  utf8,
 } from './crypto';
-import {
-  dbDelete,
-  dbGet,
-  dbGetAll,
-  dbPut,
-  deleteDatabase,
-} from './db';
-import { DEFAULT_PROFILE } from './profiles';
-import type {
-  FileMeta,
-  FileRecord,
-  MessageBody,
-  MessageRecord,
-  ProfileLevel,
-  ThreadRecord,
-  VaultMeta,
-  VaultSettings,
-} from './types';
+import type { ProfileLevel, VaultSettings } from './types';
 
 export interface ThreadMeta {
   name: string;
@@ -50,8 +29,8 @@ export interface ThreadMeta {
 }
 
 export const DEFAULT_SETTINGS: VaultSettings = {
-  displayName: 'Local Vault',
-  defaultProfile: DEFAULT_PROFILE,
+  displayName: 'CryptaVault User',
+  defaultProfile: 'BALANCED',
   autoLockMinutes: 10,
   shareTtlHours: 24,
   allowExperimental: false,
@@ -61,245 +40,251 @@ export const DEFAULT_SETTINGS: VaultSettings = {
   sharingEnabled: true,
 };
 
-export type VaultStatus = 'loading' | 'empty' | 'locked' | 'unlocked';
+export type VaultStatus = 'loading' | 'anonymous' | 'locked' | 'unlocked';
 
 interface VaultContextValue {
   status: VaultStatus;
-  meta: VaultMeta | null;
+  user: ApiUser | null;
+  vault: ApiVault | null;
+  workspaces: ApiWorkspace[];
+  currentWorkspace: ApiWorkspace | null;
   settings: VaultSettings;
   key: CryptoKey | null;
   revision: number;
   lastError: string | null;
   bumpRevision: () => void;
-  createVault: (
-    passphrase: string,
-    displayName: string,
-    defaultProfile: ProfileLevel,
-  ) => Promise<void>;
+  register: (email: string, passphrase: string, displayName: string, defaultProfile: ProfileLevel) => Promise<void>;
+  login: (email: string, passphrase: string) => Promise<void>;
   unlock: (passphrase: string) => Promise<void>;
   lock: () => void;
+  logout: () => Promise<void>;
+  refresh: () => Promise<void>;
+  selectWorkspace: (id: string) => void;
   updateSettings: (partial: Partial<VaultSettings>) => Promise<void>;
-  changePassphrase: (current: string, next: string) => Promise<void>;
+  // Compatibility aliases for older pages while migration is in progress
+  meta: { createdAt: string; settings: VaultSettings; iterations?: number; saltB64?: string } | null;
+  createVault: (passphrase: string, displayName: string, defaultProfile: ProfileLevel) => Promise<void>;
+  changePassphrase: (_current: string, _next: string) => Promise<void>;
   wipe: () => Promise<void>;
 }
 
 const VaultContext = createContext<VaultContextValue | null>(null);
 
-const VAULT_RECORD_KEY = 'vault';
+function settingsFromUser(user: ApiUser | null, prev: VaultSettings): VaultSettings {
+  if (!user) return prev;
+  return {
+    ...prev,
+    displayName: user.display_name || prev.displayName,
+    defaultProfile: (user.default_profile as ProfileLevel) || prev.defaultProfile,
+  };
+}
 
-function isVaultMeta(value: unknown): value is VaultMeta {
-  if (!value || typeof value !== 'object') return false;
-  const meta = value as Partial<VaultMeta>;
-  return meta.version === 1 && typeof meta.saltB64 === 'string' && !!meta.verifier;
+function pickWorkspace(workspaces: ApiWorkspace[], preferredId: string | null): ApiWorkspace | null {
+  if (workspaces.length === 0) return null;
+  if (preferredId) {
+    const found = workspaces.find((w) => w.id === preferredId);
+    if (found) return found;
+  }
+  return workspaces[0] ?? null;
 }
 
 export function VaultProvider({ children }: { children: ReactNode }): JSX.Element {
   const [status, setStatus] = useState<VaultStatus>('loading');
-  const [meta, setMeta] = useState<VaultMeta | null>(null);
+  const [user, setUser] = useState<ApiUser | null>(null);
+  const [vault, setVault] = useState<ApiVault | null>(null);
+  const [workspaces, setWorkspaces] = useState<ApiWorkspace[]>([]);
+  const [currentWorkspaceId, setCurrentWorkspaceId] = useState<string | null>(getStoredWorkspaceId());
   const [key, setKey] = useState<CryptoKey | null>(null);
+  const [settings, setSettings] = useState<VaultSettings>(DEFAULT_SETTINGS);
   const [revision, setRevision] = useState(0);
   const [lastError, setLastError] = useState<string | null>(null);
   const lastActivity = useRef(Date.now());
 
-  const bumpRevision = useCallback(() => setRevision((value) => value + 1), []);
-
+  const bumpRevision = useCallback(() => setRevision((v) => v + 1), []);
   const touch = useCallback(() => {
     lastActivity.current = Date.now();
   }, []);
 
+  const applySession = useCallback((me: ApiMe | { user: ApiUser; vault: ApiVault; workspaces: ApiWorkspace[] }) => {
+    setUser(me.user);
+    setVault(me.vault);
+    setWorkspaces(me.workspaces);
+    setSettings((prev) => settingsFromUser(me.user, prev));
+    setCurrentWorkspaceId((prev) => {
+      const picked = pickWorkspace(me.workspaces, prev ?? getStoredWorkspaceId());
+      setStoredWorkspaceId(picked?.id ?? null);
+      return picked?.id ?? null;
+    });
+  }, []);
+
+  const refresh = useCallback(async () => {
+    const token = getToken();
+    if (!token) {
+      setUser(null);
+      setVault(null);
+      setWorkspaces([]);
+      setKey(null);
+      setStatus('anonymous');
+      return;
+    }
+    try {
+      const me = await api.auth.me();
+      applySession(me);
+      setStatus((prev) => (prev === 'unlocked' && key ? 'unlocked' : 'locked'));
+    } catch {
+      setToken(null);
+      setUser(null);
+      setVault(null);
+      setWorkspaces([]);
+      setKey(null);
+      setStatus('anonymous');
+    }
+  }, [applySession, key]);
+
   useEffect(() => {
     let cancelled = false;
     void (async () => {
+      const token = getToken();
+      if (!token) {
+        if (!cancelled) setStatus('anonymous');
+        return;
+      }
       try {
-        const record = await dbGet<{ key: string; value: unknown }>('vault', VAULT_RECORD_KEY);
+        const me = await api.auth.me();
         if (cancelled) return;
-        if (record && isVaultMeta(record.value)) {
-          setMeta(record.value);
-          setStatus('locked');
-        } else {
-          setStatus('empty');
-        }
+        applySession(me);
+        setStatus('locked');
       } catch {
-        if (!cancelled) {
-          setStatus('empty');
-          setLastError('Browser storage is unavailable. The portal cannot persist a vault.');
-        }
+        if (cancelled) return;
+        setToken(null);
+        setStatus('anonymous');
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
-
-  const settings = meta?.settings ?? DEFAULT_SETTINGS;
+  }, [applySession]);
 
   useEffect(() => {
     document.documentElement.classList.toggle('light', settings.theme === 'light');
   }, [settings.theme]);
 
-  const persistMeta = useCallback(async (next: VaultMeta) => {
-    await dbPut('vault', { key: VAULT_RECORD_KEY, value: next });
-    setMeta(next);
+  const deriveAndVerify = useCallback(async (passphrase: string, v: ApiVault): Promise<CryptoKey> => {
+    const salt = b64ToBytes(v.salt_b64);
+    const masterKey = await deriveMasterKey(passphrase, salt, v.kdf_iterations ?? KDF_ITERATIONS);
+    const plain = await open(masterKey, v.check, 'vault:verifier');
+    if (fromUtf8(plain) !== VERIFIER_PLAINTEXT) {
+      throw new Error('Vault check failed.');
+    }
+    return masterKey;
   }, []);
 
-  const createVault = useCallback(
-    async (passphrase: string, displayName: string, defaultProfile: ProfileLevel) => {
-      setLastError(null);
-      if (passphrase.length < 10) {
-        throw new Error('Use a passphrase of at least 10 characters.');
-      }
-      const existing = await dbGet('vault', VAULT_RECORD_KEY);
-      if (existing) throw new Error('A vault already exists in this browser.');
+  const login = useCallback(async (email: string, passphrase: string) => {
+    setLastError(null);
+    const normalized = email.toLowerCase().trim();
+    const pre = await api.auth.prelogin(normalized);
+    const authSalt = b64ToBytes(pre.auth_salt_b64);
+    const iterations = pre.kdf_iterations ?? KDF_ITERATIONS;
+    const authKey = await deriveMasterKey(passphrase, authSalt, iterations, true);
+    const authRaw = new Uint8Array(await crypto.subtle.exportKey('raw', authKey));
+    const authVerifier = bytesToB64(authRaw);
+    const session = await api.auth.login({ email: normalized, auth_verifier: authVerifier });
+    setToken(session.access_token);
+    applySession(session);
+    const masterKey = await deriveAndVerify(passphrase, session.vault);
+    setKey(masterKey);
+    setStatus('unlocked');
+    lastActivity.current = Date.now();
+    bumpRevision();
+  }, [applySession, bumpRevision, deriveAndVerify]);
 
-      const salt = randomBytes(16);
-      const masterKey = await deriveMasterKey(passphrase, salt, KDF_ITERATIONS);
-      const verifier = await seal(masterKey, utf8(VERIFIER_PLAINTEXT), 'vault:verifier');
-      const now = new Date().toISOString();
-      const next: VaultMeta = {
-        version: 1,
-        saltB64: bytesToB64(salt),
-        iterations: KDF_ITERATIONS,
-        verifier,
-        settings: {
-          ...DEFAULT_SETTINGS,
-          displayName: displayName.trim() || DEFAULT_SETTINGS.displayName,
-          defaultProfile,
-        },
-        createdAt: now,
-        updatedAt: now,
-      };
-      await persistMeta(next);
+  const register = useCallback(async (email: string, passphrase: string, displayName: string, defaultProfile: ProfileLevel) => {
+    setLastError(null);
+    if (passphrase.length < 10) throw new Error('Use a passphrase of at least 10 characters.');
+    const normalized = email.toLowerCase().trim();
+    const iterations = KDF_ITERATIONS;
+    const authSalt = randomBytes(16);
+    const vaultSalt = randomBytes(16);
+    const authKey = await deriveMasterKey(passphrase, authSalt, iterations, true);
+    const masterKey = await deriveMasterKey(passphrase, vaultSalt, iterations);
+    const authRaw = new Uint8Array(await crypto.subtle.exportKey('raw', authKey));
+    const authVerifier = bytesToB64(authRaw);
+    const vaultCheck = await seal(masterKey, utf8(VERIFIER_PLAINTEXT), 'vault:verifier');
+    const session = await api.auth.register({
+      email: normalized,
+      display_name: displayName.trim() || normalized.split('@')[0] || 'User',
+      auth_salt_b64: bytesToB64(authSalt),
+      auth_verifier: authVerifier,
+      vault_salt_b64: bytesToB64(vaultSalt),
+      vault_check: vaultCheck,
+      kdf_iterations: iterations,
+    });
+    setToken(session.access_token);
+    applySession(session);
+    setKey(masterKey);
+    setStatus('unlocked');
+    lastActivity.current = Date.now();
+    // best-effort profile update
+    try {
+      await api.auth.updateMe({ default_profile: defaultProfile });
+      await refresh();
       setKey(masterKey);
       setStatus('unlocked');
-      lastActivity.current = Date.now();
-      await recordAudit('vault.created', undefined, `profile=${defaultProfile}`);
-      bumpRevision();
-    },
-    [bumpRevision, persistMeta],
-  );
+    } catch {
+      // ignore
+    }
+    bumpRevision();
+  }, [applySession, bumpRevision, refresh]);
 
-  const unlock = useCallback(
-    async (passphrase: string) => {
-      setLastError(null);
-      const record = await dbGet<{ key: string; value: VaultMeta }>('vault', VAULT_RECORD_KEY);
-      if (!record || !isVaultMeta(record.value)) {
-        setStatus('empty');
-        throw new Error('No vault exists in this browser.');
-      }
-      const salt = Uint8Array.from(atob(record.value.saltB64), (char) => char.charCodeAt(0));
-      const masterKey = await deriveMasterKey(
-        passphrase,
-        salt,
-        record.value.iterations ?? KDF_ITERATIONS,
-      );
-      try {
-        const verifier = await open(masterKey, record.value.verifier, 'vault:verifier');
-        if (fromUtf8(verifier) !== VERIFIER_PLAINTEXT) throw new Error('bad verifier');
-      } catch {
-        throw new Error('Incorrect passphrase.');
-      }
-      setKey(masterKey);
-      setMeta(record.value);
-      setStatus('unlocked');
-      lastActivity.current = Date.now();
-      await recordAudit('vault.unlocked');
-      bumpRevision();
-    },
-    [bumpRevision],
-  );
+  const unlock = useCallback(async (passphrase: string) => {
+    setLastError(null);
+    if (!vault) throw new Error('No session vault metadata. Please sign in again.');
+    const masterKey = await deriveAndVerify(passphrase, vault);
+    setKey(masterKey);
+    setStatus('unlocked');
+    lastActivity.current = Date.now();
+    bumpRevision();
+  }, [bumpRevision, deriveAndVerify, vault]);
 
   const lock = useCallback(() => {
     setKey(null);
-    setStatus((current) => (current === 'unlocked' ? 'locked' : current));
-    void recordAudit('vault.locked');
+    setStatus((s) => (s === 'unlocked' ? 'locked' : s));
   }, []);
 
-  const updateSettings = useCallback(
-    async (partial: Partial<VaultSettings>) => {
-      if (!meta) return;
-      const next: VaultMeta = {
-        ...meta,
-        settings: { ...meta.settings, ...partial },
-        updatedAt: new Date().toISOString(),
-      };
-      await persistMeta(next);
-      await recordAudit('settings.updated', undefined, Object.keys(partial).join(','));
-      bumpRevision();
-    },
-    [bumpRevision, meta, persistMeta],
-  );
-
-  const changePassphrase = useCallback(
-    async (current: string, next: string) => {
-      if (!meta || !key) throw new Error('Unlock the vault first.');
-      if (next.length < 10) throw new Error('Use a passphrase of at least 10 characters.');
-      const currentSalt = Uint8Array.from(atob(meta.saltB64), (char) => char.charCodeAt(0));
-      const currentKey = await deriveMasterKey(
-        current,
-        currentSalt,
-        meta.iterations ?? KDF_ITERATIONS,
-      );
-      try {
-        await open(currentKey, meta.verifier, 'vault:verifier');
-      } catch {
-        throw new Error('Current passphrase is incorrect.');
-      }
-
-      const salt = randomBytes(16);
-      const nextKey = await deriveMasterKey(next, salt, KDF_ITERATIONS);
-      const verifier = await seal(nextKey, utf8(VERIFIER_PLAINTEXT), 'vault:verifier');
-
-      const files = await dbGetAll<FileRecord>('files');
-      for (const file of files) {
-        const raw = await unwrapRawKey(key, file.key, `filekey:${file.id}`);
-        const fileMeta = await openJson<FileMeta>(key, file.meta, `filemeta:${file.id}`);
-        await dbPut('files', {
-          ...file,
-          key: await wrapRawKey(nextKey, raw, `filekey:${file.id}`),
-          meta: await sealJson(nextKey, fileMeta, `filemeta:${file.id}`),
-        });
-      }
-
-      const threads = await dbGetAll<ThreadRecord>('threads');
-      for (const thread of threads) {
-        const threadMeta = await openJson<ThreadMeta>(key, thread.meta, `thread:${thread.id}`);
-        await dbPut('threads', {
-          ...thread,
-          meta: await sealJson(nextKey, threadMeta, `thread:${thread.id}`),
-        });
-      }
-
-      const messages = await dbGetAll<MessageRecord>('messages');
-      for (const message of messages) {
-        const raw = await unwrapRawKey(key, message.key, `messagekey:${message.id}`);
-        await dbPut('messages', {
-          ...message,
-          key: await wrapRawKey(nextKey, raw, `messagekey:${message.id}`),
-        });
-      }
-
-      const nextMeta: VaultMeta = {
-        ...meta,
-        saltB64: bytesToB64(salt),
-        iterations: KDF_ITERATIONS,
-        verifier,
-        updatedAt: new Date().toISOString(),
-      };
-      await persistMeta(nextMeta);
-      setKey(nextKey);
-      await recordAudit('vault.passphrase_changed');
-      bumpRevision();
-    },
-    [bumpRevision, key, meta, persistMeta],
-  );
-
-  const wipe = useCallback(async () => {
-    await deleteDatabase();
+  const logout = useCallback(async () => {
+    try { await api.auth.logout(); } catch { /* ignore */ }
+    setToken(null);
+    setStoredWorkspaceId(null);
     setKey(null);
-    setMeta(null);
-    setStatus('empty');
-    window.location.reload();
+    setUser(null);
+    setVault(null);
+    setWorkspaces([]);
+    setCurrentWorkspaceId(null);
+    setStatus('anonymous');
   }, []);
+
+  const selectWorkspace = useCallback((id: string) => {
+    setCurrentWorkspaceId(id);
+    setStoredWorkspaceId(id);
+    bumpRevision();
+  }, [bumpRevision]);
+
+  const updateSettings = useCallback(async (partial: Partial<VaultSettings>) => {
+    setSettings((prev) => ({ ...prev, ...partial }));
+    const payload: { display_name?: string; default_profile?: string } = {};
+    if (partial.displayName !== undefined) payload.display_name = partial.displayName;
+    if (partial.defaultProfile !== undefined) payload.default_profile = partial.defaultProfile;
+    if (Object.keys(payload).length > 0) {
+      try {
+        const me = await api.auth.updateMe(payload);
+        applySession(me);
+        if (key) setStatus('unlocked');
+      } catch {
+        // local-only settings still applied
+      }
+    }
+    bumpRevision();
+  }, [applySession, bumpRevision, key]);
 
   useEffect(() => {
     if (status !== 'unlocked') return;
@@ -309,9 +294,7 @@ export function VaultProvider({ children }: { children: ReactNode }): JSX.Elemen
     window.addEventListener('touchstart', mark);
     const interval = window.setInterval(() => {
       const limit = Math.max(1, settings.autoLockMinutes) * 60_000;
-      if (Date.now() - lastActivity.current > limit) {
-        lock();
-      }
+      if (Date.now() - lastActivity.current > limit) lock();
     }, 15_000);
     return () => {
       window.removeEventListener('pointerdown', mark);
@@ -321,76 +304,57 @@ export function VaultProvider({ children }: { children: ReactNode }): JSX.Elemen
     };
   }, [lock, settings.autoLockMinutes, status, touch]);
 
-  useEffect(() => {
-    if (status !== 'unlocked') return;
-    const onHidden = () => {
-      if (document.visibilityState === 'hidden') touch();
-    };
-    document.addEventListener('visibilitychange', onHidden);
-    return () => document.removeEventListener('visibilitychange', onHidden);
-  }, [status, touch]);
-
-  const value = useMemo<VaultContextValue>(
-    () => ({
-      status,
-      meta,
-      settings,
-      key,
-      revision,
-      lastError,
-      bumpRevision,
-      createVault,
-      unlock,
-      lock,
-      updateSettings,
-      changePassphrase,
-      wipe,
-    }),
-    [
-      status,
-      meta,
-      settings,
-      key,
-      revision,
-      lastError,
-      bumpRevision,
-      createVault,
-      unlock,
-      lock,
-      updateSettings,
-      changePassphrase,
-      wipe,
-    ],
+  const currentWorkspace = useMemo(
+    () => pickWorkspace(workspaces, currentWorkspaceId),
+    [workspaces, currentWorkspaceId],
   );
+
+  const value = useMemo<VaultContextValue>(() => ({
+    status,
+    user,
+    vault,
+    workspaces,
+    currentWorkspace,
+    settings,
+    key,
+    revision,
+    lastError,
+    bumpRevision,
+    register,
+    login,
+    unlock,
+    lock,
+    logout,
+    refresh,
+    selectWorkspace,
+    updateSettings,
+    meta: user ? { createdAt: user.created_at ?? new Date().toISOString(), settings, iterations: vault?.kdf_iterations, saltB64: vault?.salt_b64 } : null,
+    createVault: async (passphrase: string, displayName: string, defaultProfile: ProfileLevel) => {
+      const email = user?.email;
+      if (!email) throw new Error('Email is required for registration.');
+      await register(email, passphrase, displayName, defaultProfile);
+    },
+    changePassphrase: async () => {
+      throw new Error('Passphrase rotation is not implemented yet for dynamic accounts.');
+    },
+    wipe: async () => {
+      await logout();
+    },
+  }), [status, user, vault, workspaces, currentWorkspace, settings, key, revision, lastError, bumpRevision, register, login, unlock, lock, logout, refresh, selectWorkspace, updateSettings]);
 
   return <VaultContext.Provider value={value}>{children}</VaultContext.Provider>;
 }
 
 export function useVault(): VaultContextValue {
-  const context = useContext(VaultContext);
-  if (!context) throw new Error('useVault must be used inside VaultProvider.');
-  return context;
+  const ctx = useContext(VaultContext);
+  if (!ctx) throw new Error('useVault must be used inside VaultProvider.');
+  return ctx;
 }
 
-export async function loadFileMeta(
-  key: CryptoKey,
-  file: FileRecord,
-): Promise<{ meta: FileMeta; rawKey: Uint8Array<ArrayBuffer> }> {
-  const rawKey = await unwrapRawKey(key, file.key, `filekey:${file.id}`);
-  const meta = await openJson<FileMeta>(key, file.meta, `filemeta:${file.id}`);
-  return { meta, rawKey };
+// Compatibility stubs for pages still being migrated from local IndexedDB model.
+export async function loadFileMeta(_key: CryptoKey, _file: unknown): Promise<{ meta: any; rawKey: Uint8Array<ArrayBuffer> }> {
+  throw new Error('Local file meta loading is not used in dynamic mode.');
 }
-
-export async function readMessage(
-  key: CryptoKey,
-  message: MessageRecord,
-): Promise<MessageBody> {
-  const raw = await unwrapRawKey(key, message.key, `messagekey:${message.id}`);
-  const messageKey = await importAesKey(raw);
-  return openJson<MessageBody>(messageKey, message.body, `message:${message.id}`);
-}
-
-export async function deleteFileCascade(id: string): Promise<void> {
-  await dbDelete('files', id);
-  await dbDelete('blobs', id);
+export async function deleteFileCascade(_id: string): Promise<void> {
+  throw new Error('Local file cascade delete is not used in dynamic mode.');
 }

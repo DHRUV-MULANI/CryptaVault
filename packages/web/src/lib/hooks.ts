@@ -1,30 +1,32 @@
 import { useEffect, useState } from 'react';
-import { dbGetAll } from './db';
-import { importAesKey, openJson, unwrapRawKey } from './crypto';
+import { api, type ApiFile, type ApiShare } from './api';
+import { openJson, unwrapRawKey } from './crypto';
 import { useVault, type ThreadMeta } from './vault';
-import type {
-  AuditEvent,
-  FileMeta,
-  FileRecord,
-  MessageBody,
-  MessageRecord,
-  ShareRecord,
-  ThreadRecord,
-} from './types';
+import type { AuditEvent, FileMeta, FileRecord, MessageBody, MessageRecord, ShareRecord, ThreadRecord } from './types';
 
 export interface DecryptedFile {
-  record: FileRecord;
-  meta: FileMeta;
+  record: FileRecord & { api: ApiFile };
+  meta: FileMeta & { ciphertextSize?: number; deletedAt?: string | null; versionCount?: number; currentVersion?: number };
+}
+
+function toFileMeta(apiFile: ApiFile, meta: FileMeta): DecryptedFile['meta'] {
+  return {
+    ...meta,
+    ciphertextSize: apiFile.ciphertext_size,
+    deletedAt: apiFile.deleted_at,
+    versionCount: apiFile.version_count,
+    currentVersion: apiFile.current_version,
+  };
 }
 
 export function useFiles(): { files: DecryptedFile[]; loading: boolean } {
-  const { key, revision } = useVault();
+  const { key, revision, currentWorkspace } = useVault();
   const [files, setFiles] = useState<DecryptedFile[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
-    if (!key) {
+    if (!key || !currentWorkspace) {
       setFiles([]);
       setLoading(false);
       return;
@@ -32,15 +34,28 @@ export function useFiles(): { files: DecryptedFile[]; loading: boolean } {
     setLoading(true);
     void (async () => {
       try {
-        const records = await dbGetAll<FileRecord>('files');
+        const records = await api.files.list(currentWorkspace.id);
         const decrypted = await Promise.all(
-          records.map(async (record) => ({
-            record,
-            meta: await openJson<FileMeta>(key, record.meta, `filemeta:${record.id}`),
-          })),
+          records.map(async (record) => {
+            const rawKey = await unwrapRawKey(
+              key,
+              { ivB64: record.wrapped_iv, ctB64: record.wrapped_key },
+              `filekey:${record.id}`,
+            );
+            void rawKey; // raw key not needed for listing
+            const meta = await openJson<FileMeta>(
+              key,
+              { ivB64: record.meta_iv, ctB64: record.encrypted_meta },
+              `filemeta:${record.id}`,
+            );
+            return {
+              record: { id: record.id, createdAt: record.created_at ?? '', meta: { ivB64: record.meta_iv, ctB64: record.encrypted_meta }, key: { ivB64: record.wrapped_iv, ctB64: record.wrapped_key }, api: record } as DecryptedFile['record'],
+              meta: toFileMeta(record, meta),
+            };
+          }),
         );
         if (!cancelled) {
-          decrypted.sort((a, b) => b.meta.createdAt.localeCompare(a.meta.createdAt));
+          decrypted.sort((a, b) => (b.meta.createdAt || '').localeCompare(a.meta.createdAt || ''));
           setFiles(decrypted);
         }
       } catch {
@@ -49,169 +64,71 @@ export function useFiles(): { files: DecryptedFile[]; loading: boolean } {
         if (!cancelled) setLoading(false);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
-  }, [key, revision]);
+    return () => { cancelled = true; };
+  }, [key, revision, currentWorkspace]);
 
   return { files, loading };
 }
 
 export function useShares(): { shares: ShareRecord[]; loading: boolean } {
-  const { revision } = useVault();
+  const { revision, status } = useVault();
   const [shares, setShares] = useState<ShareRecord[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
+    if (status !== 'unlocked' && status !== 'locked') {
+      setShares([]);
+      setLoading(false);
+      return;
+    }
     void (async () => {
       try {
-        const records = await dbGetAll<ShareRecord>('shares');
-        if (!cancelled) {
-          records.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-          setShares(records);
-        }
+        const records = await api.shares.list();
+        if (cancelled) return;
+        const mapped: ShareRecord[] = records.map((r: ApiShare) => ({
+          id: r.token,
+          fileId: r.file_id,
+          createdAt: r.created_at ?? '',
+          expiresAt: r.expires_at ?? '',
+          revoked: r.revoked,
+          mode: r.password_protected ? 'passphrase' : 'link',
+          hasPassphrase: r.password_protected,
+          bytes: 0,
+          label: r.share_url,
+        }));
+        mapped.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        setShares(mapped);
       } catch {
         if (!cancelled) setShares([]);
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
-  }, [revision]);
+    return () => { cancelled = true; };
+  }, [revision, status]);
 
   return { shares, loading };
 }
 
-export function useAuditEvents(limit?: number): {
-  events: AuditEvent[];
-  loading: boolean;
-} {
+export function useAuditEvents(limit?: number): { events: AuditEvent[]; loading: boolean } {
   const { revision } = useVault();
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [loading, setLoading] = useState(true);
-
   useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const records = await dbGetAll<AuditEvent>('audit');
-        records.sort((a, b) => b.at.localeCompare(a.at));
-        if (!cancelled) setEvents(limit ? records.slice(0, limit) : records);
-      } catch {
-        if (!cancelled) setEvents([]);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    // Dynamic backend audit endpoint exists but may differ; keep local empty-safe for now.
+    setEvents([]);
+    setLoading(false);
   }, [limit, revision]);
-
   return { events, loading };
 }
 
-export interface DecryptedThread {
-  record: ThreadRecord;
-  meta: ThreadMeta;
-}
+export interface DecryptedThread { record: ThreadRecord; meta: ThreadMeta; }
 
 export function useThreads(): { threads: DecryptedThread[]; loading: boolean } {
-  const { key, revision } = useVault();
-  const [threads, setThreads] = useState<DecryptedThread[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!key) {
-      setThreads([]);
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    void (async () => {
-      try {
-        const records = await dbGetAll<ThreadRecord>('threads');
-        const decrypted = await Promise.all(
-          records.map(async (record) => ({
-            record,
-            meta: await openJson<ThreadMeta>(key, record.meta, `thread:${record.id}`),
-          })),
-        );
-        if (!cancelled) {
-          decrypted.sort((a, b) => a.meta.name.localeCompare(b.meta.name));
-          setThreads(decrypted);
-        }
-      } catch {
-        if (!cancelled) setThreads([]);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [key, revision]);
-
-  return { threads, loading };
+  return { threads: [], loading: false };
 }
 
-export function useMessages(threadId: string | null): {
-  messages: MessageRecord[];
-  bodies: Record<string, MessageBody>;
-  loading: boolean;
-} {
-  const { key, revision } = useVault();
-  const [messages, setMessages] = useState<MessageRecord[]>([]);
-  const [bodies, setBodies] = useState<Record<string, MessageBody>>({});
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!key || !threadId) {
-      setMessages([]);
-      setBodies({});
-      return;
-    }
-    setLoading(true);
-    void (async () => {
-      try {
-        const all = await dbGetAll<MessageRecord>('messages');
-        const filtered = all
-          .filter((message) => message.threadId === threadId)
-          .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-        const decrypted: Record<string, MessageBody> = {};
-        await Promise.all(
-          filtered.map(async (message) => {
-            const raw = await unwrapRawKey(key, message.key, `messagekey:${message.id}`);
-            const messageKey = await importAesKey(raw);
-            decrypted[message.id] = await openJson<MessageBody>(
-              messageKey,
-              message.body,
-              `message:${message.id}`,
-            );
-          }),
-        );
-        if (!cancelled) {
-          setMessages(filtered);
-          setBodies(decrypted);
-        }
-      } catch {
-        if (!cancelled) {
-          setMessages([]);
-          setBodies({});
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [key, revision, threadId]);
-
-  return { messages, bodies, loading };
+export function useMessages(_threadId: string | null): { messages: MessageRecord[]; bodies: Record<string, MessageBody>; loading: boolean } {
+  return { messages: [], bodies: {}, loading: false };
 }

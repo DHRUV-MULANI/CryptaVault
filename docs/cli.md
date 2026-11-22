@@ -226,6 +226,102 @@ cryptavault share qr "https://example.com/share#token"
 
 Server-enforced expiry and one-time consumption require the FastAPI sharing routes. A static link cannot be revoked after it is copied.
 
+## Dynamic remote API commands
+
+The `remote` command group talks to the FastAPI backend and uses the same `CVW1` container format and remote share manifest as the web client. This makes CLI-uploaded files decryptable in the browser and web-uploaded files decryptable from the CLI.
+
+### Configuration
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CRYPTAVAULT_API_URL` | `http://localhost:8000` | FastAPI base URL |
+| `CRYPTAVAULT_SESSION` | `~/.config/cryptavault/session.json` | JWT + vault bootstrap session file |
+
+The session file contains the access token and public vault bootstrap (salt, sealed check, KDF iterations). It never contains the passphrase, master key, or raw file keys. The file is written with owner-only permissions where supported.
+
+### `cryptavault remote auth`
+
+```bash
+cryptavault remote auth register \
+  --email user@example.com \
+  --display-name "Example User" \
+  --passphrase "correct horse battery staple"
+
+cryptavault remote auth login --email user@example.com
+cryptavault remote auth whoami
+cryptavault remote auth logout
+```
+
+`register` creates the auth verifier, vault salt, and sealed vault check locally. `login` calls `/api/auth/prelogin`, derives the verifier, stores the JWT, and verifies the master key locally. `whoami` refreshes the user/workspace envelope.
+
+### `cryptavault remote workspace`
+
+```bash
+cryptavault remote workspace list
+cryptavault remote workspace create "Thesis evidence" --profile BALANCED
+cryptavault remote workspace use "Thesis evidence"
+cryptavault remote workspace delete --workspace WS_ID --yes
+cryptavault remote workspace members --workspace WS_ID
+cryptavault remote workspace add-member user@example.com --role editor --workspace WS_ID
+cryptavault remote workspace remove-member USER_ID --workspace WS_ID
+```
+
+`workspace use` accepts a name or ID and stores the active workspace ID in the session file.
+
+### `cryptavault remote files`
+
+```bash
+cryptavault remote files list [--trash] [--workspace WS] [--passphrase PASS]
+cryptavault remote files upload FILE [--profile BALANCED] [--version-of FILE_ID]
+cryptavault remote files download FILE_ID [--version N] [--output PATH]
+cryptavault remote files versions FILE_ID
+cryptavault remote files restore FILE_ID VERSION
+cryptavault remote files rename FILE_ID "new name.pdf" [--passphrase PASS]
+cryptavault remote files trash FILE_ID
+cryptavault remote files untrash FILE_ID
+cryptavault remote files delete FILE_ID --yes
+cryptavault remote files share FILE_ID [--ttl 24] [--max-uses 5] [--password SHARE_SECRET]
+```
+
+| Option | Meaning |
+|---|---|
+| `--profile` | `PERFORMANCE`, `STANDARD`, `BALANCED`, `STRONG`, `PQ_STRONG`, `MAXIMUM` |
+| `--version-of FILE_ID` | Upload the next immutable version of an existing file |
+| `--passphrase`, `-p` | Master passphrase for non-interactive commands; prompted when omitted |
+| `--workspace`, `-w` | Workspace name or ID; defaults to the active workspace |
+| `--yes` | Confirm permanent deletion |
+
+`files list`, `files download`, `files rename`, and `files share` need the master key, so they prompt for the passphrase unless `--passphrase` is supplied. `upload` generates a fresh raw key per version, wraps it with the master key, and seals metadata under `filemeta:<fileId>`.
+
+Compression is automatic for text-like files. Containers use gzip when compression is applied and AES-256-GCM for every chunk.
+
+### `cryptavault remote shares`
+
+```bash
+cryptavault remote shares list
+cryptavault remote shares revoke TOKEN
+cryptavault remote shares decrypt 'http://localhost:3000/#/s/TOKEN?m=...&k=...' \
+  [--password SHARE_SECRET] [--output PATH]
+```
+
+`shares decrypt` parses the manifest and capability key from the link, fetches server-enforced share policy, downloads ciphertext, unwraps the file key, decrypts, and verifies the plaintext SHA-256.
+
+### Remote workflow example
+
+```bash
+export CRYPTAVAULT_SESSION=/tmp/cv-demo-session.json
+export CRYPTAVAULT_API_URL=http://127.0.0.1:8000
+
+cryptavault remote auth login --email demo@cryptavault.dev
+cryptavault remote files upload report.pdf --profile BALANCED --passphrase 'CryptaVaultDemo!2026'
+cryptavault remote files list --passphrase 'CryptaVaultDemo!2026'
+cryptavault remote files download FILE_ID --output restored.pdf --passphrase 'CryptaVaultDemo!2026'
+cryptavault remote files share FILE_ID --ttl 24 --max-uses 5 --passphrase 'CryptaVaultDemo!2026'
+cryptavault remote shares decrypt 'PASTE_LINK' --output shared.pdf
+```
+
+See [demo.md](demo.md) for the complete web + CLI + API demonstration.
+
 ## Storage
 
 `storage` resolves a connector from a URI and moves encrypted files only.

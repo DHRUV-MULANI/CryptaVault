@@ -13,6 +13,7 @@ from cryptavault.storage.cloud.r2 import CloudflareR2Storage
 from cryptavault.storage.ftp import FtpStorage
 from cryptavault.storage.local import LocalStorage
 from cryptavault.storage.mock import MockStorage
+from cryptavault.storage.s3 import S3Storage
 from cryptavault.storage.sftp import SftpStorage
 from cryptavault.storage.supabase import SupabaseStorage
 
@@ -53,11 +54,17 @@ def resolve_storage(uri_or_path: str) -> StorageConnector:
         )
         return SupabaseStorage(bucket_name=bucket)
 
-    if scheme in ("r2", "s3"):
+    if scheme == "r2":
         bucket = parsed.netloc or (
             parsed.path.strip("/").split("/")[0] if parsed.path else "vaults"
         )
         return CloudflareR2Storage(bucket_name=bucket)
+
+    if scheme in ("s3", "minio"):
+        bucket = parsed.netloc or (
+            parsed.path.strip("/").split("/")[0] if parsed.path else "cryptavault"
+        )
+        return S3Storage(bucket_name=bucket)
 
     if scheme == "sftp":
         return SftpStorage.from_uri(uri_or_path)

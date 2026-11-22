@@ -117,30 +117,28 @@ def test_ai_knowledge_base_concepts() -> None:
 # ==========================================
 
 
-def test_api_admin_routes_and_rbac() -> None:
-    """Verify admin endpoints enforce RBAC and impersonation."""
-    user_headers = {"Authorization": "Bearer mock-user-token-alice"}
-    admin_headers = {"Authorization": "Bearer mock-user-token-admin_super"}
+def test_api_admin_routes_and_rbac(api_client, auth_headers) -> None:
+    """Verify admin endpoints enforce real JWT RBAC and impersonation."""
+    user_headers = auth_headers("demo@cryptavault.dev")
+    admin_headers = auth_headers("admin@cryptavault.dev")
 
-    # User cannot access admin users list (403 Forbidden)
-    res_user = client.get("/api/admin/users", headers=user_headers)
+    res_user = api_client.get("/api/admin/users", headers=user_headers)
     assert res_user.status_code == 403
 
-    # Admin can access admin users list
-    res_admin = client.get("/api/admin/users", headers=admin_headers)
+    res_admin = api_client.get("/api/admin/users", headers=admin_headers)
     assert res_admin.status_code == 200
-    assert len(res_admin.json()) >= 2
+    users = res_admin.json()
+    assert len(users) >= 2
+    target = next(user for user in users if user["email"] == "demo@cryptavault.dev")
 
-    # Admin impersonation
-    imp_res = client.post("/api/admin/impersonate/alice", headers=admin_headers)
+    imp_res = api_client.post(f"/api/admin/impersonate/{target['id']}", headers=admin_headers)
     assert imp_res.status_code == 200
-    imp_token = imp_res.json()["access_token"]
-    assert "alice" in imp_token
+    assert imp_res.json()["impersonated_user"] == target["id"]
+    assert imp_res.json()["access_token"]
 
-    # Feature flags
-    flags_res = client.get("/api/admin/flags", headers=admin_headers)
+    flags_res = api_client.get("/api/admin/flags", headers=admin_headers)
     assert flags_res.status_code == 200
-    assert flags_res.json()["enable_pq"] is True
+    assert flags_res.json()["enable_sharing"] is True
 
 
 def test_api_metrics_and_security_badge() -> None:
@@ -176,8 +174,10 @@ def test_api_ai_recommend_and_chat() -> None:
     assert len(res_concepts.json()) >= 10
 
 
-def test_storage_r2_and_upload_api() -> None:
-    """Verify Cloudflare R2 storage registration and zero-knowledge upload route."""
+def test_storage_target_admin_and_ciphertext_upload(api_client, auth_headers) -> None:
+    """Verify S3/cloud target registry plus the zero-knowledge upload API."""
+    import uuid
+
     from cryptavault.storage.cloud.r2 import CloudflareR2Storage
     from cryptavault.storage.registry import resolve_storage
 
@@ -185,20 +185,34 @@ def test_storage_r2_and_upload_api() -> None:
     assert isinstance(r2_conn, CloudflareR2Storage)
     assert r2_conn.scheme == "r2"
 
-    headers = {"Authorization": "Bearer mock-user-token-alice"}
-    file_content = b"CVLT\x01\x00\x03\x01CIPHERTEXT_TEST_PAYLOAD"
-    files = {"file": ("test_doc.vault", file_content, "application/octet-stream")}
-    data = {
-        "backend": "r2",
-        "profile_level": "MAXIMUM",
-        "custom_domain": "https://vault.mycollegedomain.com",
-    }
-    res = client.post("/api/storage/upload", headers=headers, files=files, data=data)
-    assert res.status_code == 200
-    res_json = res.json()
-    assert res_json["storage_backend"] == "r2"
-    assert "https://vault.mycollegedomain.com" in res_json["public_url"]
+    headers = auth_headers("admin@cryptavault.dev")
+    targets = api_client.get("/api/storage/targets", headers=headers)
+    assert targets.status_code == 200
+    assert any(target["name"] == "local" for target in targets.json())
 
-    res_list = client.get("/api/storage/files", headers=headers)
-    assert res_list.status_code == 200
-    assert len(res_list.json()) >= 1
+    workspace_id = api_client.get("/api/workspaces", headers=headers).json()[0]["id"]
+    file_id = str(uuid.uuid4())
+    form = {
+        "file_id": file_id,
+        "version": "1",
+        "encrypted_meta": "ZW5jcnlwdGVkLW1ldGE=",
+        "meta_iv": "MTIzNDU2Nzg5MDEy",
+        "wrapped_key": "d3JhcHBlZC1rZXk=",
+        "wrapped_iv": "MTIzNDU2Nzg5MDEy",
+        "profile": "MAXIMUM",
+        "storage_target": "local",
+    }
+    upload = api_client.post(
+        f"/api/workspaces/{workspace_id}/files/upload",
+        headers=headers,
+        data=form,
+        files={"ciphertext": ("test.cv", b"CIPHERTEXT_TEST_PAYLOAD", "application/octet-stream")},
+    )
+    assert upload.status_code == 201, upload.text
+    assert upload.json()["storage_target"] == "local"
+
+    files = api_client.get(f"/api/workspaces/{workspace_id}/files", headers=headers)
+    assert files.status_code == 200
+    assert any(item["id"] == file_id for item in files.json())
+
+    api_client.delete(f"/api/files/{file_id}/permanent", headers=headers)

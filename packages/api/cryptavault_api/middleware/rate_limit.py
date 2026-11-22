@@ -24,21 +24,23 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self.rpm = requests_per_minute
         self.auth_rpm = auth_requests_per_minute
-        self._history: dict[str, list[float]] = defaultdict(list)
+        self._history: dict[tuple[str, str], list[float]] = defaultdict(list)
 
     async def dispatch(self, request: Request, call_next: Any) -> Response:
         request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
         client_ip = request.client.host if request.client else "127.0.0.1"
 
         is_auth = request.url.path.startswith("/api/auth")
+        bucket = "auth" if is_auth else "api"
         max_allowed = self.auth_rpm if is_auth else self.rpm
+        key = (client_ip, bucket)
 
         now = time.time()
         window_start = now - 60.0
 
         # Purge timestamps older than 60s
-        timestamps = [t for t in self._history[client_ip] if t > window_start]
-        self._history[client_ip] = timestamps
+        timestamps = [t for t in self._history[key] if t > window_start]
+        self._history[key] = timestamps
 
         if len(timestamps) >= max_allowed:
             return JSONResponse(
@@ -53,9 +55,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 },
             )
 
-        self._history[client_ip].append(now)
+        self._history[key].append(now)
 
         response: Response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
-        response.headers["X-RateLimit-Remaining"] = str(max_allowed - len(self._history[client_ip]))
+        response.headers["X-RateLimit-Remaining"] = str(
+            max(0, max_allowed - len(self._history[key]))
+        )
         return response

@@ -42,6 +42,7 @@ export interface FileMeta {
   compression: 'none' | 'gzip';
   profile: ProfileLevel;
   createdAt: string;
+  folder?: string;
 }
 
 export interface FileRecord {

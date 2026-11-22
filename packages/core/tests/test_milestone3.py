@@ -192,86 +192,85 @@ def test_api_health_and_readiness() -> None:
     assert res_ready.json()["status"] == "ready"
 
 
-def test_api_user_manifest_sync_isolation() -> None:
-    """Verify encrypted manifest upload and retrieve for authenticated user."""
-    auth_headers = {"Authorization": "Bearer mock-user-token-alice"}
+def test_api_local_auth_and_workspace_isolation(api_client, auth_headers) -> None:
+    """Verify local accounts, JWT sessions, and workspace isolation."""
+    unknown = api_client.post("/api/auth/prelogin", json={"email": "nobody@cryptavault.dev"})
+    assert unknown.status_code == 200
+    assert unknown.json()["exists"] is False
 
-    # Initially 404
-    res = client.get("/api/users/me/manifest", headers=auth_headers)
-    assert res.status_code == 404
+    admin_headers = auth_headers("admin@cryptavault.dev")
+    me = api_client.get("/api/auth/me", headers=admin_headers)
+    assert me.status_code == 200
+    admin_workspace_ids = {workspace["id"] for workspace in me.json()["workspaces"]}
+    assert admin_workspace_ids
 
-    # Upload encrypted manifest
-    manifest_payload = {
-        "manifest_version": 1,
-        "ciphertext_b64": "ZW5jcnlwdGVkX21hbmlmZXN0",
-        "nonce_b64": "MTIzNDU2Nzg5MDEy",
-        "hash_blake3_hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-        "file_count": 3,
+    viewer_headers = auth_headers("viewer@cryptavault.dev")
+    viewer_me = api_client.get("/api/auth/me", headers=viewer_headers)
+    assert viewer_me.status_code == 200
+    viewer_workspace_ids = {workspace["id"] for workspace in viewer_me.json()["workspaces"]}
+
+    private_workspace = next(iter(admin_workspace_ids - viewer_workspace_ids), None)
+    if private_workspace:
+        denied = api_client.get(
+            f"/api/workspaces/{private_workspace}/files", headers=viewer_headers
+        )
+        assert denied.status_code == 403
+
+
+def test_api_share_token_consume_flow(api_client, auth_headers) -> None:
+    """Verify encrypted file sharing with expiry/use limits and public download."""
+    import uuid
+
+    headers = auth_headers("demo@cryptavault.dev")
+    workspaces = api_client.get("/api/workspaces", headers=headers).json()
+    workspace_id = workspaces[0]["id"]
+    file_id = str(uuid.uuid4())
+    form = {
+        "file_id": file_id,
+        "version": "1",
+        "encrypted_meta": "ZW5jcnlwdGVkLW1ldGE=",
+        "meta_iv": "MTIzNDU2Nzg5MDEy",
+        "wrapped_key": "d3JhcHBlZC1rZXk=",
+        "wrapped_iv": "MTIzNDU2Nzg5MDEy",
+        "profile": "BALANCED",
+        "storage_target": "local",
     }
-    put_res = client.put("/api/users/me/manifest", json=manifest_payload, headers=auth_headers)
-    assert put_res.status_code == 200
+    upload = api_client.post(
+        f"/api/workspaces/{workspace_id}/files/upload",
+        headers=headers,
+        data=form,
+        files={"ciphertext": ("report.cv", b"encrypted-report-body", "application/octet-stream")},
+    )
+    assert upload.status_code == 201, upload.text
 
-    # Retrieve
-    get_res = client.get("/api/users/me/manifest", headers=auth_headers)
-    assert get_res.status_code == 200
-    assert get_res.json()["hash_blake3_hex"] == manifest_payload["hash_blake3_hex"]
+    create = api_client.post(
+        "/api/shares",
+        headers=headers,
+        json={"file_id": file_id, "max_uses": 1, "password": "share-pass"},
+    )
+    assert create.status_code == 201, create.text
+    token = create.json()["token"]
 
-    # User B cannot see User A's manifest
-    bob_headers = {"Authorization": "Bearer mock-user-token-bob"}
-    bob_res = client.get("/api/users/me/manifest", headers=bob_headers)
-    assert bob_res.status_code == 404
+    inspect = api_client.get(f"/api/shares/{token}")
+    assert inspect.status_code == 200
+    assert inspect.json()["file_id"] == file_id
+    assert inspect.json()["remaining_uses"] == 1
+    assert inspect.json()["password_protected"] is True
 
+    wrong = api_client.post(f"/api/shares/{token}/download", json={"password": "wrong-pass"})
+    assert wrong.status_code == 401
 
-def test_api_share_token_consume_flow() -> None:
-    """Verify API share creation, public inspect, and consume flow."""
-    auth_headers = {"Authorization": "Bearer mock-user-token-carol"}
+    consume = api_client.post(f"/api/shares/{token}/download", json={"password": "share-pass"})
+    assert consume.status_code == 200
+    assert consume.content == b"encrypted-report-body"
 
-    create_payload = {
-        "file_id": "report-2026",
-        "filename": "Q3_Audit.pdf",
-        "ciphertext_ref": "supabase://vaults/report-2026.enc",
-        "max_uses": 1,
-        "password_protected": False,
-    }
-    create_res = client.post("/api/shares", json=create_payload, headers=auth_headers)
-    assert create_res.status_code == 200
-    token_id = create_res.json()["token_id"]
+    exhausted = api_client.post(f"/api/shares/{token}/download", json={"password": "share-pass"})
+    assert exhausted.status_code == 410
 
-    # Public inspect (no auth required)
-    inspect_res = client.get(f"/api/shares/{token_id}")
-    assert inspect_res.status_code == 200
-    assert inspect_res.json()["file_id"] == "report-2026"
-    assert inspect_res.json()["remaining_uses"] == 1
-
-    # Consume token
-    consume_res = client.post(f"/api/shares/{token_id}/consume")
-    assert consume_res.status_code == 200
-    assert consume_res.json()["remaining_uses"] == 0
-
-    # Second consume is rejected (410 GONE)
-    consume_res_2 = client.post(f"/api/shares/{token_id}/consume")
-    assert consume_res_2.status_code == 410
+    api_client.delete(f"/api/files/{file_id}/permanent", headers=headers)
 
 
-def test_api_audit_append_and_verify() -> None:
-    """Verify audit log append and client-side chain verification."""
-    auth_headers = {"Authorization": "Bearer mock-user-token-dave"}
-
-    # Append entry
-    audit_entry = {
-        "operation": "ENCRYPT",
-        "file_id": "file-xyz",
-        "file_hash": "a" * 64,
-        "profile_level": "MAXIMUM",
-        "signature": "sig_hex",
-        "public_key": "pub_hex",
-        "extra": {"chunks": 4},
-    }
-    post_res = client.post("/api/audit", json=audit_entry, headers=auth_headers)
-    assert post_res.status_code == 200
-    assert post_res.json()["status"] == "recorded"
-
-    # List entries
-    list_res = client.get("/api/audit", headers=auth_headers)
-    assert list_res.status_code == 200
-    assert list_res.json()["total"] >= 1
+def test_api_audit_feature_is_not_exposed(api_client) -> None:
+    """Audit logging is intentionally excluded from the dynamic product scope."""
+    assert api_client.get("/api/audit").status_code == 404
+    assert api_client.post("/api/audit", json={}).status_code == 404

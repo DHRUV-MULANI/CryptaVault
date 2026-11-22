@@ -1,18 +1,22 @@
-"""Supabase client dependency and authentication helpers for CryptaVault API."""
+"""Authentication dependencies for local JWT-backed CryptaVault accounts.
+
+The module name is kept for backwards compatibility with the existing route
+imports, but the implementation no longer depends on Supabase. Supabase Auth is
+optional for deployments that want an external identity provider.
+"""
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
+import jwt
 from fastapi import Depends, Header, HTTPException, status
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
-try:
-    from supabase import Client, create_client
-except ImportError:
-    Client = None  # type: ignore[assignment, misc]
-    create_client = None  # type: ignore[assignment]
+from cryptavault_api.db import get_db
+from cryptavault_api.models import User
+from cryptavault_api.security import decode_access_token
 
 
 class AuthenticatedUser(BaseModel):
@@ -21,42 +25,33 @@ class AuthenticatedUser(BaseModel):
     id: str
     email: str | None = None
     role: str = "user"
+    display_name: str = ""
     app_metadata: dict[str, Any] = {}
     user_metadata: dict[str, Any] = {}
 
 
-def get_supabase_client() -> Client:
-    """Instantiate or return the Supabase client."""
-    url = os.getenv("SUPABASE_URL", "")
-    key = (
-        os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-        or os.getenv("SUPABASE_KEY")
-        or os.getenv("SUPABASE_ANON_KEY", "")
+def _to_authenticated_user(user: User) -> AuthenticatedUser:
+    return AuthenticatedUser(
+        id=user.id,
+        email=user.email,
+        role=user.role,
+        display_name=user.display_name,
+        app_metadata={"role": user.role},
+        user_metadata={"display_name": user.display_name},
     )
-    if not url or not key:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Supabase environment configuration (SUPABASE_URL, SUPABASE_KEY) missing.",
-        )
-    if create_client is None:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="supabase python package not available.",
-        )
-    return create_client(url, key)
 
 
 async def get_current_user(
     authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
 ) -> AuthenticatedUser:
-    """Validate Bearer JWT token against Supabase Auth."""
+    """Validate a Bearer JWT and load the active user from Postgres."""
     if not authorization:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing Authorization header",
             headers={"WWW-Authenticate": "Bearer"},
         )
-
     parts = authorization.split()
     if len(parts) != 2 or parts[0].lower() != "bearer":
         raise HTTPException(
@@ -64,55 +59,34 @@ async def get_current_user(
             detail="Invalid Authorization header format. Expected 'Bearer <token>'",
             headers={"WWW-Authenticate": "Bearer"},
         )
-
-    token = parts[1]
-
-    # Special dev/mock token for testing and local development
-    if token.startswith("mock-user-token-"):
-        user_id = token.replace("mock-user-token-", "")
-        role = "admin" if "admin" in user_id else "user"
-        return AuthenticatedUser(
-            id=user_id,
-            email=f"{user_id}@cryptavault.local",
-            role=role,
-            app_metadata={"role": role},
-            user_metadata={"display_name": user_id.capitalize()},
-        )
-
     try:
-        supabase = get_supabase_client()
-        user_res = supabase.auth.get_user(token)
-        if user_res is None or user_res.user is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User not found or session expired",
-            )
-        user = user_res.user
-        role = user.app_metadata.get("role", "user") if user.app_metadata else "user"
-        return AuthenticatedUser(
-            id=user.id,
-            email=user.email,
-            role=role,
-            app_metadata=user.app_metadata or {},
-            user_metadata=user.user_metadata or {},
-        )
-    except Exception as e:
-        if isinstance(e, HTTPException):
-            raise
+        payload = decode_access_token(parts[1])
+    except jwt.InvalidTokenError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Authentication failed: {e!s}",
-        ) from e
+            detail=f"Invalid or expired token: {exc}",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+    user = db.get(User, str(payload.get("sub", "")))
+    if user is None or user.suspended:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User is missing or suspended.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return _to_authenticated_user(user)
 
 
 async def get_optional_user(
     authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
 ) -> AuthenticatedUser | None:
-    """Optional authentication returning user if valid token present, otherwise None."""
+    """Optional authentication returning a user when a valid token is present."""
     if not authorization:
         return None
     try:
-        return await get_current_user(authorization)
+        return await get_current_user(authorization, db)
     except HTTPException:
         return None
 

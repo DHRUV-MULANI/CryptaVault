@@ -2,13 +2,14 @@
 
 **AI-assisted adaptive hybrid cryptographic storage with a strict client-side zero-knowledge boundary.**
 
-CryptaVault encrypts files and metadata on the client, selects cryptographic primitives from a versioned catalog, and stores only ciphertext, wrapped keys, and integrity metadata. It ships a Python cryptographic engine, a Typer CLI, a FastAPI coordination backend, and a browser portal that runs entirely on GitHub Pages.
+CryptaVault encrypts files and metadata on the client, selects cryptographic primitives from a versioned catalog, and stores only ciphertext, wrapped keys, integrity metadata, and non-identifying policy records. The current dynamic deployment is a local full-stack application: React + Vite web client, FastAPI coordination API, Neon Postgres metadata, S3-compatible ciphertext storage (SeaweedFS locally), and a Typer CLI that shares the same remote API and wire format.
 
-**Live portal:** https://dhruv-mulani.github.io/CryptaVault/
-
-[![Tests](https://img.shields.io/badge/tests-161%20passing-brightgreen.svg)](packages/core/tests)
+[![Tests](https://img.shields.io/badge/tests-165%20passing-brightgreen.svg)](packages/core/tests)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Portal](https://img.shields.io/badge/portal-GitHub%20Pages-blue.svg)](https://dhruv-mulani.github.io/CryptaVault/)
+[![API](https://img.shields.io/badge/API-FastAPI%202.0.0-009688.svg)](packages/api)
+[![Web](https://img.shields.io/badge/web-React%20%2B%20Vite-646CFF.svg)](packages/web)
+
+> The GitHub Pages workflow can host the SPA assets, but the dynamic application requires a reachable FastAPI instance. GitHub Pages cannot host the API, Neon database, or S3 bucket. The reproducible demo runs locally; see [docs/demo.md](docs/demo.md).
 
 ---
 
@@ -17,33 +18,32 @@ CryptaVault encrypts files and metadata on the client, selects cryptographic pri
 ```
 Client boundary (plaintext and private keys never leave)
 ┌──────────────────────────────────────────────────────────────────────┐
-│ CLI (Python)                          Browser portal (WebCrypto)     │
+│ CLI (Python)                          Browser (React + WebCrypto)    │
 │                                                                      │
-│ passphrase ──► KDF ──► master key ──► per-file key                   │
-│ file ──► entropy check ──► optional compression ──► chunked AEAD     │
-│                                                      │               │
+│ passphrase ──► PBKDF2 ──► master key ──► per-file key                │
+│ file ──► optional gzip ──► chunked AES-256-GCM ──► CVW1 container    │
 │                    encrypted manifest + wrapped key ─┘               │
-│                    Merkle root + optional signature                   │
 └──────────────────────────────────┬───────────────────────────────────┘
-                                   │ ciphertext only
+                                   │ ciphertext + wrapped keys only
                                    ▼
-        Local disk / IndexedDB / Supabase / S3-compatible / SFTP / FTPS
+        FastAPI ──► Neon Postgres (metadata, auth, shares, policy)
+                └─► S3-compatible storage (ciphertext objects)
 ```
 
-1. **Derive a key.** The CLI uses Argon2id; the static browser portal uses PBKDF2-SHA256 (210,000 iterations) because WebCrypto exposes PBKDF2 in every target browser. The derived master key stays in memory.
-2. **Generate a per-file key.** Every file gets a fresh 256-bit key. File names, hashes, and manifests are sealed separately with the master key.
-3. **Choose a profile.** A 0–100 slider maps to six profiles. The profile controls the AEAD cipher, hash, signature/KEM selection, KDF cost, chunk size, and whether post-quantum and multi-layer modes are enabled.
-4. **Encrypt before storage.** Files are chunked with authenticated boundaries (AES-256-GCM or ChaCha20-Poly1305). The core pipeline adds a BLAKE3/SHA-2/SHA-3 Merkle root and an optional Ed25519 or hybrid post-quantum signature.
-5. **Persist only ciphertext.** Storage receives a container, an encrypted manifest, and a wrapped file key. No plaintext, no master key, and no readable file name crosses the boundary.
-6. **Fail closed.** A tampered chunk, reordered chunk, wrong Merkle root, wrong algorithm binding, or bad signature aborts decryption before plaintext is released.
+1. **Authenticate locally.** The browser and remote CLI derive an auth verifier and a 256-bit master key from the passphrase with PBKDF2-SHA256 (210,000 iterations). The verifier authenticates the account; the master key stays in the client.
+2. **Generate a per-file key.** Every file version gets a fresh 256-bit key. File names, hashes, and manifests are sealed separately with the master key under an AAD bound to the file ID.
+3. **Choose a profile.** Six profiles control chunk size, catalog primitives, KDF cost, compression, post-quantum readiness, and multi-layer policy. `BALANCED` is the default.
+4. **Encrypt before storage.** The web client and remote CLI produce compatible `CVW1` containers: gzip-optional payload, chunked AES-256-GCM with authenticated boundaries, and a plaintext SHA-256 integrity hash.
+5. **Persist only ciphertext.** Neon stores users, workspaces, roles, quotas, file/version metadata, wrapped keys, shares, and policy flags. S3 receives ciphertext objects only. No plaintext, master key, or raw file key reaches the API.
+6. **Fail closed.** A tampered chunk, wrong key, reordered container, expired/revoked share, or hash mismatch aborts decryption before plaintext is released.
 
-The exact algorithms and stable wire IDs used for a file are recorded in its container header. Old files remain decryptable after defaults change, and unknown algorithms fail closed instead of silently downgrading.
+The core Python engine additionally supports the full `CVV2` pipeline with catalog-selected algorithms, Merkle roots, signatures, and post-quantum operations. The dynamic web/remote path intentionally uses the portable browser-compatible `CVW1` subset so the same file can be uploaded in the browser and downloaded from the CLI, or vice versa.
 
 ---
 
 ## Six security profiles
 
-| Profile | Slider | AEAD | Hash | KDF (Argon2id) | Chunk | Post-quantum | Multi-layer |
+| Profile | Slider | Core AEAD | Hash | KDF (Argon2id) | Chunk | Post-quantum | Multi-layer |
 |---|---|---:|---|---:|---:|---|---|
 | `PERFORMANCE` | 0–20 | AES-256-GCM | BLAKE3 | 32 MiB / t=2 | 4 MiB | No | No |
 | `STANDARD` | 20–40 | AES-256-GCM | SHA-256 | 48 MiB / t=3 | 4 MiB | No | No |
@@ -52,7 +52,7 @@ The exact algorithms and stable wire IDs used for a file are recorded in its con
 | `PQ_STRONG` | 80–90 | AES-256-GCM | SHA3-512 | 96 MiB / t=5 | 8 MiB | Yes | No |
 | `MAXIMUM` | 90–100 | AES-256-GCM cascade | SHA3-512 | 128 MiB / t=5 | 16 MiB | Yes | Yes |
 
-The browser portal mirrors the profile names, profile descriptions, and chunk sizes, but uses PBKDF2 at the vault level and gzip for optional compression. See [docs/crypto_catalog.md](docs/crypto_catalog.md) for the complete 88-algorithm catalog, stable wire IDs, and API surface.
+The dynamic web/remote path mirrors the profile names, descriptions, and chunk sizes, but uses PBKDF2 at the vault level, gzip for optional compression, and AES-256-GCM for container chunks. See [docs/crypto_catalog.md](docs/crypto_catalog.md) for the 88-algorithm catalog.
 
 ---
 
@@ -60,122 +60,179 @@ The browser portal mirrors the profile names, profile descriptions, and chunk si
 
 | Area | What is implemented | Documentation |
 |---|---|---|
+| Dynamic auth | Local accounts, PBKDF2 verifier, JWT sessions, auto-lock, profile updates | [docs/api.md](docs/api.md) |
+| Workspaces | Owner/editor/viewer/admin roles, members, quotas, per-workspace storage target | [docs/api.md](docs/api.md) |
+| Encrypted vault | Chunked client-side upload, immutable versions, rename, trash/restore, permanent delete | [docs/portal.md](docs/portal.md) |
+| Secure sharing | Server-enforced expiry/uses/revocation, passphrase shares, web-compatible manifest links | [docs/api.md](docs/api.md) |
+| Live dashboard | User/admin aggregates, storage mix, quota, recent files, activity counters | [docs/portal.md](docs/portal.md) |
+| Admin console | Role/quota/suspension controls, feature flags, storage health tests, system health | [docs/portal.md](docs/portal.md) |
+| Remote CLI | Login/register, workspaces, upload/download, versions, trash, shares, share decryption | [docs/cli.md](docs/cli.md) |
+| Storage | S3-compatible local SeaweedFS, fallback/health checks, config-ready cloud connectors | [docs/api.md](docs/api.md) |
 | Adaptive profiles | Six profiles, slider resolution, persisted active profile, profile API | [docs/crypto_catalog.md](docs/crypto_catalog.md) |
 | Crypto catalog | Versioned catalog, lifecycle gates, 88 algorithms, wire IDs, implemented/runtime flags | [docs/crypto_catalog.md](docs/crypto_catalog.md) |
 | Core pipeline | Compression, chunked AEAD, Merkle integrity, signatures, `CVV2` framing, legacy `CVV1` read path | [docs/container_format.md](docs/container_format.md) |
-| Keys and recovery | Encrypted keystore, BIP-39 mnemonic recovery, keystore inspection | [docs/cli.md](docs/cli.md) |
-| Secure sharing | Capability links, passphrase-protected shares, encrypted bundles, timed links, QR codes | [docs/cli.md](docs/cli.md), [docs/portal.md](docs/portal.md) |
-| Web portal | Local vault, file encryption, shares, encrypted messages, catalog browser, academy, settings, diagnostics | [docs/portal.md](docs/portal.md) |
-| Admin and governance | Local policy flags, inventory, audit export, wipe; API admin routes | [docs/portal.md](docs/portal.md), [docs/api.md](docs/api.md) |
-| Storage connectors | Local, Supabase, SFTP, FTPS, mock, and cloud connector scaffolding | [docs/api.md](docs/api.md), [docs/deployment.md](docs/deployment.md) |
-| Integrity and shredding | Merkle proofs, detached signatures, DoD-style multi-pass overwrite | [docs/cli.md](docs/cli.md) |
 | AI advisory | Offline knowledge base and explain/advise commands with data minimization | [docs/cli.md](docs/cli.md) |
+| Integrity and shredding | Merkle proofs, detached signatures, DoD-style multi-pass overwrite | [docs/cli.md](docs/cli.md) |
 | Zero-knowledge model | Boundaries, threat model, what the server can and cannot see, limitations | [docs/security_model.md](docs/security_model.md) |
-| GitHub Pages deployment | Automatic build and deploy on every push to `main` | [docs/deployment.md](docs/deployment.md) |
 
 ---
 
-## Installation
+## Local full-stack quickstart
 
 ### Prerequisites
 
-- Python 3.11+
-- Node.js 20+ and pnpm (web portal)
-- `uv` (recommended for Python)
-- Optional: native `liboqs` shared library for post-quantum KEM/signature tests
+- Python 3.11 and `uv`
+- Node.js 20+ and `pnpm` (the repo examples use `npx -y pnpm`)
+- A Neon Postgres database (or a local Postgres URL)
+- An S3-compatible bucket; the demo uses SeaweedFS because Docker/MinIO are unavailable in this environment
+- Optional: native `liboqs` for post-quantum core tests
 
-### CLI
+### 1. Install
 
 ```bash
 git clone https://github.com/DHRUV-MULANI/CryptaVault.git
 cd CryptaVault
 
 uv venv .venv --python 3.11
-uv pip install --python .venv/bin/python -e packages/core -e packages/cli
-source .venv/bin/activate
+uv pip install --python .venv/bin/python -e packages/core -e packages/api -e packages/cli
 
-cryptavault --help
-cryptavault status
+npx -y pnpm install
 ```
 
-To install the optional post-quantum extra:
+### 2. Configure `.env`
 
-```bash
-uv pip install --python .venv/bin/python -e 'packages/core[pq]'
-# The Python package still needs the native liboqs shared library at runtime.
+Create `.env` in the repo root (it is ignored). Required values:
+
+```dotenv
+DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST/DB?sslmode=require
+JWT_SECRET=replace-with-a-32-byte-or-longer-random-secret
+S3_ENDPOINT_URL=http://127.0.0.1:9000
+S3_ACCESS_KEY=minioadmin
+S3_SECRET_KEY=minioadmin
+S3_BUCKET=cryptavault
+PUBLIC_SHARE_DOMAIN=http://localhost:3000
+CRYPTAVAULT_ENV=development
 ```
 
-### Web portal
+Optional cloud connectors: `GDRIVE_*`, `DROPBOX_*`, and `ONEDRIVE_*`. They remain config-ready until OAuth applications are supplied.
+
+### 3. Start the local S3 service
+
+The demo uses SeaweedFS on port 9000. See [docs/demo.md](docs/demo.md) for the exact local command and bucket bootstrap. MinIO is not usable in this environment because the community download endpoint returns `410 Gone`, and Docker is unavailable.
+
+### 4. Start the API
 
 ```bash
-pnpm install
-pnpm --filter @cryptavault/web dev
-# Open the printed localhost URL, usually http://localhost:5173
-```
-
-For a production build with the GitHub Pages base path:
-
-```bash
-VITE_BASE=/CryptaVault/ pnpm --filter @cryptavault/web build
-```
-
-### API
-
-```bash
-uv pip install --python .venv/bin/python -e packages/core -e packages/api
-.venv/bin/uvicorn cryptavault_api.main:app --host 127.0.0.1 --port 8000 --reload
+.venv/bin/uvicorn cryptavault_api.main:app --host 127.0.0.1 --port 8000
 # OpenAPI: http://127.0.0.1:8000/docs
+# Health:  http://127.0.0.1:8000/health
 ```
 
-The static portal does not require the API. The API is only needed for Supabase-backed identity, server-coordinated sharing, encrypted storage uploads, admin governance, audit chains, and metrics.
+### 5. Start the web client
+
+```bash
+npx -y pnpm --filter @cryptavault/web dev
+# http://localhost:3000
+```
+
+The web client calls `http://localhost:8000` by default. Override with `VITE_API_URL` when building or running elsewhere.
+
+### 6. Sign in
+
+Seed/demo accounts in the local database:
+
+| Account | Password | Role |
+|---|---|---|
+| `admin@cryptavault.dev` | `CryptaVaultDemo!2026` | admin |
+| `demo@cryptavault.dev` | `CryptaVaultDemo!2026` | user |
+| `viewer@cryptavault.dev` | `CryptaVaultDemo!2026` | viewer |
+
+The accounts are seeded by the API startup path when `CRYPTAVAULT_SEED_DEMO=true` (the default) and no users exist yet. If your database was created before the `.dev` migration, recreate or reseed the demo users.
 
 ---
 
-## CLI quickstart
+## Web client quickstart
+
+1. Open `http://localhost:3000` and sign in with a demo account.
+2. **Dashboard** shows live quota, storage mix, workspace totals, and decrypted recent files.
+3. **Vault** uploads a file: it is compressed when useful, chunked, encrypted with a fresh key, and uploaded as ciphertext. The matching manifest is sealed with your master key.
+4. **Versions** adds an immutable version; **Trash** restores or permanently deletes.
+5. **Share** creates a server-enforced link with expiry/use limits and an optional passphrase. The generated manifest link is stored in this browser under `cryptavault.share.link.{token}` because the server never receives decryptable URL material.
+6. **Shares** lists server shares and local links; revoke invalidates future API downloads.
+7. **Workspaces** manages members, roles, quotas, and the active workspace.
+8. **Admin** is visible to admin accounts and controls users, quotas, suspension, flags, storage tests, and health.
+9. **Status** checks `/health`, `/ready`, storage targets, browser crypto support, and the AES-GCM self-test.
+10. **Catalog** and **Academy** remain reference pages for the 88 algorithms and the zero-knowledge model.
+
+Public share links use the form:
+
+```text
+http://localhost:3000/#/s/<token>?m=<encrypted-manifest>&k=<raw-share-key>
+```
+
+Passphrase-protected links omit `k`; the recipient enters the share passphrase. Legacy static `#/share?d=...` links are no longer decryptable by the dynamic viewer because they need a self-contained container manifest.
+
+---
+
+## Dynamic remote CLI quickstart
+
+The `remote` commands use the same API and `CVW1` wire format as the web client. The session file stores the JWT and vault bootstrap, never the master key or passphrase.
 
 ```bash
-# Hardware, profile, and post-quantum readiness
+# Login and inspect the session
+.venv/bin/cryptavault remote auth login --email demo@cryptavault.dev
+.venv/bin/cryptavault remote auth whoami
+
+# Workspaces
+.venv/bin/cryptavault remote workspace list
+.venv/bin/cryptavault remote workspace create "Thesis evidence"
+.venv/bin/cryptavault remote workspace use "Thesis evidence"
+.venv/bin/cryptavault remote workspace members
+
+# Encrypt/upload, list, and round-trip
+.venv/bin/cryptavault remote files upload report.pdf --profile BALANCED
+.venv/bin/cryptavault remote files list
+.venv/bin/cryptavault remote files download FILE_ID --output restored.pdf
+
+# Immutable versions and trash
+.venv/bin/cryptavault remote files upload report.pdf --version-of FILE_ID
+.venv/bin/cryptavault remote files versions FILE_ID
+.venv/bin/cryptavault remote files restore FILE_ID 1
+.venv/bin/cryptavault remote files trash FILE_ID
+.venv/bin/cryptavault remote files untrash FILE_ID
+
+# Share and decrypt anonymously
+.venv/bin/cryptavault remote files share FILE_ID --ttl 24 --max-uses 5
+.venv/bin/cryptavault remote shares list
+.venv/bin/cryptavault remote shares decrypt 'http://localhost:3000/#/s/...'
+.venv/bin/cryptavault remote shares revoke TOKEN
+```
+
+Use `CRYPTAVAULT_SESSION=/path/to/session.json` to isolate a demo session and `CRYPTAVAULT_API_URL` to target another API. Add `--passphrase` to non-interactive commands.
+
+### Local core CLI
+
+The original offline cryptographic toolkit remains available:
+
+```bash
 cryptavault status
 cryptavault profiles
-cryptavault profile list
-cryptavault profile set --slider 85     # resolves to PQ_STRONG
-
-# Generate a 256-bit master key + 24-word BIP-39 recovery phrase
+cryptavault profile set --slider 85
 cryptavault keygen --output vault.keystore --passphrase "correct horse battery staple"
-cryptavault inspect-keystore --keystore vault.keystore --passphrase "correct horse battery staple"
-
-# Full pipeline: compression, chunked AEAD, Merkle tree, signature
 cryptavault pipeline-encrypt document.pdf --output document.vault --profile MAXIMUM
 cryptavault pipeline-decrypt document.vault --output restored.pdf --profile MAXIMUM
-
-# Lightweight authenticated encryption and integrity tools
 cryptavault encrypt --input secrets.txt --output secrets.enc --profile BALANCED
 cryptavault decrypt --input secrets.enc --output secrets.txt
 cryptavault sign release.tar.gz --output-sig release.sig
 cryptavault verify release.tar.gz --sig release.sig --pubkey release.pub
 cryptavault merkle --dir ./data
 cryptavault shred obsolete.db --passes 3
-
-# Sharing, storage, learning, and advisory
 cryptavault share create document.vault --timed 3600 --qr
-cryptavault storage upload document.vault local://./vault-data
 cryptavault teach zero-knowledge
 cryptavault ai advise document.pdf
 ```
 
-See [docs/cli.md](docs/cli.md) for every command, option, and example.
-
-## Web portal quickstart
-
-1. Open https://dhruv-mulani.github.io/CryptaVault/.
-2. Create a local vault with a passphrase of at least 10 characters and choose a default profile.
-3. Upload a file from **Vault**. It is read, compressed if useful, chunked, encrypted, and stored in IndexedDB in this browser.
-4. Create a share from the file row. Small files produce a self-contained link; larger payloads produce an encrypted `.cvshare.json` bundle.
-5. Open **Shares** to inspect or revoke the local share record, or **Share viewer** to decrypt a link or bundle.
-6. Use **Messages** for local encrypted notes, **Catalog** for all 88 algorithms, **Academy** for an implementation-aligned explainer, and **Status** to run a browser crypto self-test.
-7. Use **Settings** to rotate the passphrase, export an encrypted backup, or wipe the vault. **Admin** holds local policy flags and the audit log.
-
-The portal stores data only in this browser. Clearing site data, using a different browser, or a private window loses local access unless you exported a backup. See [docs/portal.md](docs/portal.md).
+See [docs/cli.md](docs/cli.md) for the full offline command reference.
 
 ---
 
@@ -183,17 +240,17 @@ The portal stores data only in this browser. Clearing site data, using a differe
 
 ```bash
 # Python
-.venv/bin/python -m pytest packages/core/tests packages/api/tests packages/cli/tests --hypothesis-seed=0
+.venv/bin/pytest -q --hypothesis-seed=0
 .venv/bin/ruff check .
 .venv/bin/black --check .
 .venv/bin/mypy packages/core/cryptavault packages/api/cryptavault_api packages/cli/cryptavault_cli
 
 # Web
-pnpm --filter @cryptavault/web typecheck
-pnpm --filter @cryptavault/web build
+npx -y pnpm --filter @cryptavault/web run typecheck
+npx -y pnpm --filter @cryptavault/web run build
 ```
 
-Current suite: **161 tests passing**, ruff/black/mypy clean, and the portal builds with Vite.
+Current suite: **165 tests passing**, ruff/mypy clean for the dynamic packages, and the web client typechecks and builds. The backend tests use an isolated SQLite database under `/tmp/opencode/cryptavault-tests/`; production uses Neon Postgres.
 
 ---
 
@@ -202,12 +259,12 @@ Current suite: **161 tests passing**, ruff/black/mypy clean, and the portal buil
 ```
 packages/
 ├── core/    # catalog, adaptive engine, crypto, pipeline, keys, integrity, storage, sharing
-├── api/     # FastAPI routers for auth, users, shares, storage, audit, admin, metrics, crypto catalog
-├── cli/     # Typer CLI: keys, encrypt/decrypt, pipeline, profiles, sharing, storage, teach, AI
-├── web/     # React + Vite + Tailwind zero-knowledge portal
+├── api/     # FastAPI auth, workspaces, files, shares, storage, dashboard, admin
+├── cli/     # Typer offline toolkit + `cryptavault remote` API client
+├── web/     # React + Vite zero-knowledge dynamic client
 ├── admin/   # separate governance console scaffold
 └── wasm/    # WebAssembly binding scaffold
-docs/        # portal, CLI, deployment, catalog, container, security, API references
+docs/        # demo, portal, CLI, deployment, catalog, container, security, API references
 scripts/     # catalog export and utility scripts
 .github/     # CI and GitHub Pages deployment workflows
 ```
@@ -216,13 +273,17 @@ scripts/     # catalog export and utility scripts
 
 ## Security and limitations
 
-- Plaintext and private keys never leave the client boundary. The API and storage backends receive ciphertext, encrypted manifests, wrapped keys, and non-identifying metadata only.
-- The static portal's share links are **capability URLs**: anyone with the link and optional passphrase can decrypt. Revoking a local share record cannot invalidate a link or bundle that was already copied.
-- Static-deployment share expiry is advisory. The API can enforce server-side expiry and one-time consumption.
-- The portal's encrypted messages are local-only in this deployment. Cross-device delivery requires the API relay.
-- The core orchestrator currently buffers the whole file for compression/decryption even though the chunk encryptor itself is incremental. True bounded-memory streaming is a documented roadmap item, not a current claim.
-- Post-quantum operations require the native `liboqs` library. Without it, affected tests and operations fail closed with `OqsNotAvailableError`.
-- This is a research and portfolio deployment, not an audited production cryptographic product.
+- Plaintext, passphrases, master keys, and raw file keys never leave the client boundary. Neon and S3 receive ciphertext, wrapped keys, encrypted manifests, and non-identifying metadata only.
+- The server can enforce share expiry, use limits, revocation, passphrase policy, workspace roles, quotas, and account status. It cannot decrypt file contents or names.
+- Share links are capability URLs: anyone with the link and optional passphrase can decrypt while the share is valid. Revocation and expiry stop future API downloads, but a recipient who already decrypted a file keeps that plaintext.
+- The server never stores decryptable share URLs; generated links are kept in the creating browser's local storage.
+- Dynamic web/remote encryption buffers each file in memory. The core pipeline is chunked but the orchestration is not yet fully bounded-memory streaming.
+- Cloud connectors are config-ready but not operational without OAuth applications and credentials.
+- Workspace membership shares metadata and policy, not a shared vault key. A member can manage files they uploaded; decrypting another member's uploads requires the same master key.
+- Feature flags are stored in the database but not yet enforced across every route.
+- Passphrase rotation is not implemented for dynamic accounts; the UI disables it and points to a future CLI migration.
+- Post-quantum operations require native `liboqs`. Without it, affected core operations fail closed with `OqsNotAvailableError`.
+- This is a research and final-year project deployment, not an audited production cryptographic product.
 
 Full details: [docs/security_model.md](docs/security_model.md).
 
@@ -230,13 +291,16 @@ Full details: [docs/security_model.md](docs/security_model.md).
 
 ## Documentation
 
+- [End-to-end demo runbook](docs/demo.md)
+- [Technical report](docs/REPORT.md)
+- [Presentation deck](docs/CryptaVault_Dynamic_Stack.pptx)
 - [Web portal guide](docs/portal.md)
 - [CLI reference](docs/cli.md)
+- [API reference](docs/api.md)
 - [Deployment guide](docs/deployment.md)
 - [Crypto catalog and profiles](docs/crypto_catalog.md)
 - [Container formats](docs/container_format.md)
 - [Security model](docs/security_model.md)
-- [API reference](docs/api.md)
 - [Architecture](ARCHITECTURE.md)
 - [Software requirements](SRS.md)
 - [Changelog](CHANGELOG.md)

@@ -5,6 +5,37 @@ The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [2.0.0] - 2026-11-08
+
+### Dynamic Multi-User Stack: Web, API, Neon and Remote CLI
+
+#### Backend and persistence
+- Replaced the static Supabase-oriented coordination path with local accounts, PBKDF2 verifiers, JWT sessions, and an SQLAlchemy persistence layer.
+- Added Neon Postgres metadata for users, vault bootstrap, workspaces, roles, quotas, file versions, encrypted manifests, wrapped keys, shares, storage targets, settings, and admin state.
+- Added authenticated routes for auth/profile, workspaces/members, encrypted upload/version/download, rename, trash/restore/permanent delete, shares, storage health, dashboard, and admin.
+- Added per-user quota enforcement, workspace RBAC, share expiry/use-limit/revocation enforcement, passphrase share checks, storage target fallback, and service health/readiness endpoints.
+- Enforced administrator feature flags: sharing, version history, cloud connectors, and maintenance-mode write pauses now change route behavior instead of being display-only.
+- Made deletion share-safe and quota-correct: deleting a workspace or file removes its shares first, and ciphertext bytes are refunded to the user who created each version.
+- Rejected share creation with a non-future expiry and added manifest support to the share QR endpoint.
+- Added S3-compatible ciphertext storage with a working SeaweedFS local target and config-ready cloud connectors.
+
+#### Web client
+- Reworked the React portal into a dynamic client: remote login/register/unlock, JWT sessions, workspace switching, remote file upload/download, version restore, trash, rename, server shares, public share viewer, live dashboard, workspace management, admin console, settings, and status diagnostics.
+- Standardized the browser `CVW1` container: PBKDF2-SHA256 vault derivation, per-file AES-256-GCM keys, chunk AAD, optional gzip, sealed metadata manifests, wrapped keys, and SHA-256 verification.
+- Added server-share manifests with capability and passphrase modes; generated links are stored locally because the server never receives decryptable URL material.
+
+#### Remote CLI
+- Added `cryptavault remote` with auth, workspace, files, and shares command groups.
+- Implemented session persistence, PBKDF2 login/register, workspace selection, encrypted upload/download, immutable versions, rename, restore, trash/untrash, permanent delete, share creation, share listing/revocation, and anonymous share decryption.
+- Made CLI containers and share manifests compatible with the web client, including version records and metadata AAD by file ID.
+
+#### Documentation and verification
+- Rewrote README, demo runbook, portal guide, CLI reference, and technical report for the dynamic stack.
+- Added a 15-slide presentation deck and reproducible generator.
+- Verified 165 Python tests, ruff, black, mypy, web typecheck, web production build, and a live web/API/Neon/SeaweedFS + CLI smoke flow.
+
+---
+
 ## [1.1.0] - 2026-11-07
 
 ### Deployable Portal, Six Profiles, and Crypto Catalog

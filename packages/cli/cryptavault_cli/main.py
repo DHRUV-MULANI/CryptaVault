@@ -23,6 +23,7 @@ from cryptavault_cli.commands.profile import (
     profile_set_slider_command,
 )
 from cryptavault_cli.commands.profiles import profiles_command
+from cryptavault_cli.commands.remote import remote_app
 from cryptavault_cli.commands.share import share_app
 from cryptavault_cli.commands.status import status_command
 from cryptavault_cli.commands.storage import storage_app
@@ -49,6 +50,11 @@ Quickstart Examples:
 
   # Create a timed share link with custom domain and QR code:
   cryptavault share create confidential.vault --domain https://vault.yourdomain.com --timed 3600 --qr
+
+  # Dynamic stack: login, upload ciphertext, and create a server-enforced share:
+  cryptavault remote auth login --email demo@cryptavault.dev
+  cryptavault remote files upload report.pdf --profile BALANCED
+  cryptavault remote files share FILE_ID --ttl 24 --max-uses 5
 """,
     add_completion=False,
     no_args_is_help=True,
@@ -72,6 +78,7 @@ app.add_typer(storage_app, name="storage")
 app.add_typer(share_app, name="share")
 app.add_typer(ai_app, name="ai")
 app.add_typer(teach_app, name="teach")
+app.add_typer(remote_app, name="remote")
 
 
 @profile_app.command("list")

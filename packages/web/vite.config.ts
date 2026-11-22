@@ -5,7 +5,29 @@ export default defineConfig(({ mode }) => ({
   base: process.env.VITE_BASE || '/',
   plugins: [react()],
   server: {
+    host: '0.0.0.0',
     port: 3000,
+    strictPort: true,
+    allowedHosts: true,
+    proxy: {
+      '/api': {
+        target: process.env.VITE_PROXY_API_URL || 'http://127.0.0.1:8000',
+        changeOrigin: true,
+      },
+      '/health': {
+        target: process.env.VITE_PROXY_API_URL || 'http://127.0.0.1:8000',
+        changeOrigin: true,
+      },
+      '/ready': {
+        target: process.env.VITE_PROXY_API_URL || 'http://127.0.0.1:8000',
+        changeOrigin: true,
+      },
+    },
+  },
+  preview: {
+    host: '0.0.0.0',
+    port: 3000,
+    strictPort: true,
   },
   build: {
     outDir: 'dist',

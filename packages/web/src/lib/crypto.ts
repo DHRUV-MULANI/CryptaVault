@@ -63,6 +63,7 @@ export async function deriveMasterKey(
   passphrase: string,
   salt: Bytes,
   iterations = KDF_ITERATIONS,
+  extractable = false,
 ): Promise<CryptoKey> {
   const material = await globalThis.crypto.subtle.importKey(
     'raw',
@@ -80,7 +81,7 @@ export async function deriveMasterKey(
     },
     material,
     { name: 'AES-GCM', length: 256 },
-    false,
+    extractable,
     ['encrypt', 'decrypt'],
   );
 }

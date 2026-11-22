@@ -6,6 +6,7 @@ import { ToastProvider } from './components/ui';
 import Layout from './components/Layout';
 import { VaultProvider, useVault } from './lib/vault';
 import AuthPage from './pages/AuthPage';
+import LandingPage from './pages/LandingPage';
 import Dashboard from './pages/Dashboard';
 import VaultPage from './pages/VaultPage';
 import SharesPage from './pages/SharesPage';
@@ -16,6 +17,7 @@ import AdminPage from './pages/AdminPage';
 import SettingsPage from './pages/SettingsPage';
 import StatusPage from './pages/StatusPage';
 import ShareViewer from './pages/ShareViewer';
+import WorkspacesPage from './pages/WorkspacesPage';
 
 function LoadingScreen(): JSX.Element {
   return (
@@ -24,7 +26,7 @@ function LoadingScreen(): JSX.Element {
         <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-400 to-blue-600 text-slate-950 shadow-glow">
           <ShieldCheck className="h-6 w-6" />
         </span>
-        <div className="text-sm text-slate-400">Opening local vault…</div>
+        <div className="text-sm text-slate-400">Connecting to CryptaVault…</div>
         <div className="h-1 w-40 overflow-hidden rounded-full bg-white/10">
           <div className="shimmer h-full w-full" />
         </div>
@@ -37,12 +39,8 @@ function NotFound(): JSX.Element {
   return (
     <div className="card mx-auto max-w-lg p-8 text-center">
       <div className="text-5xl font-semibold text-white">404</div>
-      <p className="mt-2 text-sm text-slate-400">
-        This route does not exist in the CryptaVault portal.
-      </p>
-      <a href="#/" className="btn-primary mt-5 inline-flex">
-        Back to overview
-      </a>
+      <p className="mt-2 text-sm text-slate-400">This route does not exist in the CryptaVault portal.</p>
+      <a href="#/" className="btn-primary mt-5 inline-flex">Back to overview</a>
     </div>
   );
 }
@@ -51,12 +49,17 @@ function Shell(): JSX.Element {
   const { status } = useVault();
   const [location] = useLocation();
 
-  if (location.startsWith('/share')) {
+  if (location.startsWith('/share') || location.startsWith('/s/')) {
     return <ShareViewer />;
   }
 
   if (status === 'loading') return <LoadingScreen />;
-  if (status !== 'unlocked') return <AuthPage />;
+  if (status !== 'unlocked') {
+    if (location === '/auth' || location === '/login' || location === '/register') {
+      return <AuthPage />;
+    }
+    return <LandingPage />;
+  }
 
   return (
     <Layout>
@@ -64,6 +67,7 @@ function Shell(): JSX.Element {
         <Route path="/" component={Dashboard} />
         <Route path="/vault" component={VaultPage} />
         <Route path="/shares" component={SharesPage} />
+        <Route path="/workspaces" component={WorkspacesPage} />
         <Route path="/messages" component={MessagesPage} />
         <Route path="/catalog" component={CatalogPage} />
         <Route path="/academy" component={AcademyPage} />
