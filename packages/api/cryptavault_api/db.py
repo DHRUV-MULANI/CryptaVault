@@ -35,12 +35,22 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
+def _ensure_column(conn, table: str, column: str, ddl: str) -> None:
+    rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
+    if any(r[1] == column for r in rows):
+        return
+    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+
+
 def init_db() -> None:
     """Create tables and seed local demo data."""
     from cryptavault_api import models  # noqa: F401
     from cryptavault_api.seed import seed_defaults
 
     Base.metadata.create_all(bind=engine)
+    with engine.begin() as conn:
+        _ensure_column(conn, "shares", "recipient_email", "VARCHAR(320)")
+        _ensure_column(conn, "shares", "pin_hash", "TEXT")
     with SessionLocal() as db:
         seed_defaults(db)
 

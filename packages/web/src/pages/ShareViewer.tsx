@@ -23,6 +23,7 @@ export default function ShareViewer(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [passphrase, setPassphrase] = useState('');
   const [sharePassword, setSharePassword] = useState('');
+  const [sharePin, setSharePin] = useState('');
   const [decrypting, setDecrypting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [done, setDone] = useState<{ name: string; size: number } | null>(null);
@@ -46,6 +47,7 @@ export default function ShareViewer(): JSX.Element {
 
   const needsPassphrase = parsed?.payload.kdf === 'pbkdf2';
   const needsServerPassword = Boolean(serverInfo?.password_protected);
+  const needsServerPin = Boolean(serverInfo?.pin_required);
 
   async function decryptLegacy() {
     if (!parsed) return;
@@ -64,7 +66,11 @@ export default function ShareViewer(): JSX.Element {
     if (!serverShare.keyB64Url) { setError('This server share link is missing the key fragment (#k=...). Ask the sender for the full link.'); return; }
     setDecrypting(true); setError(null); setProgress(0);
     try {
-      const bytes = await api.shares.download(serverShare.token, needsServerPassword ? sharePassword : undefined);
+      const bytes = await api.shares.download(
+        serverShare.token,
+        needsServerPassword ? sharePassword : undefined,
+        needsServerPin ? sharePin : undefined,
+      );
       const container = JSON.parse(new TextDecoder().decode(bytes));
       const rawKey = b64UrlToBytes(serverShare.keyB64Url);
       const plaintext = await decryptContainer(container, rawKey, setProgress);
@@ -120,13 +126,15 @@ export default function ShareViewer(): JSX.Element {
                 <div className="text-sm font-medium text-white">Server share</div>
                 <div className="mt-1 text-xs text-slate-400">Token: <span className="mono">{serverShare.token.slice(0, 16)}…</span></div>
                 {serverInfo && <div className="mt-2 grid gap-2 sm:grid-cols-2 text-[11px] text-slate-400">
-                  <div>Status: {String(serverInfo.password_protected ? 'password protected' : 'no server password')}</div>
+                  <div>Password: {serverInfo.password_protected ? 'required' : 'none'}</div>
+                  <div>PIN: {serverInfo.pin_protected ? (serverInfo.pin_required ? 'required' : 'not required for you') : 'none'}</div>
                   <div>Remaining uses: {String(serverInfo.remaining_uses ?? '—')}</div>
-                  <div>Version: {String(serverInfo.version ?? '—')}</div>
                   <div>Ciphertext: {formatBytes(Number(serverInfo.ciphertext_size ?? 0))}</div>
+                  {serverInfo.recipient_email ? <div className="sm:col-span-2">Recipient: {String(serverInfo.recipient_email)} {serverInfo.recipient_match ? '(you — PIN bypassed)' : ''}</div> : null}
                 </div>}
                 {!serverShare.keyB64Url && <div className="mt-2 text-xs text-amber-200">Missing key fragment. The full link must include `#...?...&k=...`.</div>}
                 {needsServerPassword && <label className="mt-3 block"><span className="mb-1.5 block text-xs font-medium text-slate-300">Share password</span><input className="input" type="password" value={sharePassword} onChange={(e) => setSharePassword(e.target.value)} /></label>}
+                {needsServerPin && <label className="mt-3 block"><span className="mb-1.5 block text-xs font-medium text-slate-300">8-digit access PIN</span><input className="input font-mono tracking-widest" inputMode="numeric" maxLength={8} value={sharePin} onChange={(e) => setSharePin(e.target.value.replace(/\D/g, '').slice(0, 8))} placeholder="Enter 8-digit PIN" /></label>}
               </Card>
             )}
 
@@ -144,7 +152,7 @@ export default function ShareViewer(): JSX.Element {
 
             <div className="flex flex-wrap gap-2">
               {parsed && <button className="btn-primary" onClick={() => void decryptLegacy()} disabled={decrypting || (needsPassphrase && !passphrase)}>{decrypting ? <Spinner /> : <Download className="h-4 w-4" />} Decrypt & download</button>}
-              {serverShare && <button className="btn-primary" onClick={() => void decryptServerShare()} disabled={decrypting || (needsServerPassword && !sharePassword)}>{decrypting ? <Spinner /> : <Download className="h-4 w-4" />} Download & decrypt</button>}
+              {serverShare && <button className="btn-primary" onClick={() => void decryptServerShare()} disabled={decrypting || (needsServerPassword && !sharePassword) || (needsServerPin && sharePin.length !== 8)}>{decrypting ? <Spinner /> : <Download className="h-4 w-4" />} Download & decrypt</button>}
               <button className="btn-secondary" onClick={() => { sessionStorage.removeItem(BUNDLE_KEY); window.location.hash = '#/share'; window.location.reload(); }}>Open another</button>
             </div>
           </div>

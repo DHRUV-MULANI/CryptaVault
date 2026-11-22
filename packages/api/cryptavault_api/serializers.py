@@ -106,20 +106,25 @@ def file_public(file: FileObject, version: FileVersion, version_count: int = 1) 
     }
 
 
-def share_public(share: Share, share_url: str) -> dict[str, Any]:
-    return {
+def share_public(share: Share, share_url: str, *, pin: str | None = None) -> dict[str, Any]:
+    data: dict[str, Any] = {
         "token": share.token,
         "file_id": share.file_id,
         "version": share.version,
         "share_url": share_url,
+        "recipient_email": share.recipient_email,
         "created_at": share.created_at.isoformat() if share.created_at else None,
         "expires_at": share.expires_at.isoformat() if share.expires_at else None,
         "max_uses": share.max_uses,
         "uses": share.uses,
         "remaining_uses": max(0, share.max_uses - share.uses),
         "password_protected": bool(share.password_hash),
+        "pin_protected": bool(share.pin_hash),
         "revoked": share.revoked,
     }
+    if pin is not None:
+        data["pin"] = pin
+    return data
 
 
 def target_public(target: StorageTarget, *, include_config: bool = False) -> dict[str, Any]:

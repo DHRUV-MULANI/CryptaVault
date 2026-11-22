@@ -1,4 +1,5 @@
 import './index.css';
+import { useEffect } from 'react';
 import { Route, Router, Switch, useLocation } from 'wouter';
 import { useHashLocation } from 'wouter/use-hash-location';
 import { ShieldCheck } from 'lucide-react';
@@ -45,6 +46,14 @@ function NotFound(): JSX.Element {
   );
 }
 
+function Redirect({ to }: { to: string }): JSX.Element {
+  const [, setLocation] = useLocation();
+  useEffect(() => {
+    setLocation(to, { replace: true });
+  }, [setLocation, to]);
+  return <LoadingScreen />;
+}
+
 function Shell(): JSX.Element {
   const { status } = useVault();
   const [location] = useLocation();
@@ -54,11 +63,19 @@ function Shell(): JSX.Element {
   }
 
   if (status === 'loading') return <LoadingScreen />;
+
   if (status !== 'unlocked') {
     if (location === '/auth' || location === '/login' || location === '/register') {
       return <AuthPage />;
     }
-    return <LandingPage />;
+    // Keep public landing at root; deep app links go to auth
+    if (location === '/' || location === '') return <LandingPage />;
+    return <Redirect to="/auth" />;
+  }
+
+  // Unlocked: never show auth/landing; send to dashboard
+  if (location === '/auth' || location === '/login' || location === '/register' || location === '') {
+    return <Redirect to="/" />;
   }
 
   return (

@@ -178,13 +178,19 @@ export interface ApiShare {
   file_id: string;
   version: number;
   share_url: string;
+  recipient_email: string | null;
   created_at: string | null;
   expires_at: string | null;
   max_uses: number;
   uses: number;
   remaining_uses: number;
   password_protected: boolean;
+  pin_protected: boolean;
   revoked: boolean;
+  pin?: string;
+  owner_id?: string;
+  ciphertext_size?: number;
+  profile?: string;
 }
 
 export const api = {
@@ -271,14 +277,18 @@ export const api = {
   },
   shares: {
     list: () => apiFetch<ApiShare[]>('/api/shares'),
-    create: (payload: { file_id: string; version?: number; expires_at?: string | null; max_uses: number; password?: string | null }) =>
+    received: () => apiFetch<ApiShare[]>('/api/shares/received'),
+    create: (payload: { file_id: string; version?: number; expires_at?: string | null; max_uses: number; password?: string | null; recipient_email?: string | null; pin?: string | null }) =>
       apiFetch<ApiShare>('/api/shares', { method: 'POST', body: JSON.stringify(payload) }),
     info: (token: string) => apiFetch<Record<string, unknown>>(`/api/shares/${token}`),
-    download: async (token: string, password?: string) => {
+    download: async (token: string, password?: string, pin?: string) => {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      const t = getToken();
+      if (t) headers.Authorization = `Bearer ${t}`;
       const response = await fetch(`${API_URL}/api/shares/${token}/download`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(password ? { password } : {}),
+        headers,
+        body: JSON.stringify({ ...(password ? { password } : {}), ...(pin ? { pin } : {}) }),
       });
       if (!response.ok) {
         const body = await parseBody(response);
@@ -286,6 +296,10 @@ export const api = {
       }
       return new Uint8Array(await response.arrayBuffer());
     },
+    updatePin: (token: string, pin?: string | null) =>
+      apiFetch<ApiShare>(`/api/shares/${token}/pin`, { method: 'PATCH', body: JSON.stringify({ pin: pin ?? null }) }),
+    regenerate: (token: string) =>
+      apiFetch<ApiShare>(`/api/shares/${token}/regenerate`, { method: 'POST' }),
     revoke: (token: string) => apiFetch<{ status: string }>(`/api/shares/${token}`, { method: 'DELETE' }),
   },
   dashboard: {

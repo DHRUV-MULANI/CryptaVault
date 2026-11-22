@@ -125,10 +125,12 @@ class Share(Base):
     file_id: Mapped[str] = mapped_column(String(36), ForeignKey("files.id"), index=True)
     version: Mapped[int] = mapped_column(Integer)
     owner_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    recipient_email: Mapped[str | None] = mapped_column(String(320), nullable=True, index=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     max_uses: Mapped[int] = mapped_column(Integer, default=1)
     uses: Mapped[int] = mapped_column(Integer, default=0)
     password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pin_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     revoked: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

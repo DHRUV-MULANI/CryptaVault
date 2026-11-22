@@ -1,4 +1,4 @@
-"""Capability-link sharing with expiry, passphrases, and download limits."""
+"""Capability-link sharing with expiry, passphrases, PIN, and download limits."""
 
 from __future__ import annotations
 
@@ -9,12 +9,12 @@ from typing import Any
 from cryptavault.sharing.qr import generate_qr_png
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
-from sqlalchemy import select
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from cryptavault_api.db import get_db
-from cryptavault_api.deps.supabase import AuthenticatedUser, get_current_user
+from cryptavault_api.deps.supabase import AuthenticatedUser, get_current_user, get_optional_user
 from cryptavault_api.models import FileObject, FileVersion, Share
 from cryptavault_api.security import hash_verifier, verify_verifier
 from cryptavault_api.serializers import share_public
@@ -32,10 +32,49 @@ class CreateShareRequest(BaseModel):
     expires_at: datetime | None = None
     max_uses: int = Field(default=1, ge=1, le=10_000)
     password: str | None = Field(default=None, min_length=4, max_length=256)
+    recipient_email: str | None = Field(default=None, max_length=320)
+    pin: str | None = Field(default=None, description="8-digit access PIN; auto-assigned if omitted")
+
+    @field_validator("recipient_email")
+    @classmethod
+    def _norm_email(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip().lower()
+        return v or None
+
+    @field_validator("pin")
+    @classmethod
+    def _norm_pin(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        if not (v.isdigit() and len(v) == 8):
+            raise ValueError("PIN must be exactly 8 digits")
+        return v
 
 
 class DownloadShareRequest(BaseModel):
     password: str | None = None
+    pin: str | None = None
+
+
+class UpdatePinRequest(BaseModel):
+    pin: str | None = Field(default=None, description="New 8-digit PIN, or null to auto-generate")
+
+    @field_validator("pin")
+    @classmethod
+    def _norm_pin(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        if not (v.isdigit() and len(v) == 8):
+            raise ValueError("PIN must be exactly 8 digits")
+        return v
 
 
 def _aware(value: datetime) -> datetime:
@@ -44,6 +83,16 @@ def _aware(value: datetime) -> datetime:
 
 def _share_url(token: str) -> str:
     return f"{settings.public_share_domain}/#/s/{token}"
+
+
+def _generate_pin() -> str:
+    return f"{secrets.randbelow(90_000_000) + 10_000_000}"
+
+
+def _is_recipient(share: Share, current: AuthenticatedUser | None) -> bool:
+    if not share.recipient_email or current is None:
+        return False
+    return current.email.lower() == share.recipient_email.lower()
 
 
 def _validate_share(share: Share) -> None:
@@ -55,6 +104,11 @@ def _validate_share(share: Share) -> None:
         raise HTTPException(
             status_code=status.HTTP_410_GONE, detail="Share download limit reached."
         )
+
+
+def _require_owner_or_admin(share: Share, current: AuthenticatedUser) -> None:
+    if share.owner_id != current.id and current.role != "admin":
+        raise HTTPException(status_code=403, detail="Cannot modify another user's share.")
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -83,20 +137,23 @@ def create_share(
     )
     if record is None:
         raise HTTPException(status_code=404, detail="Version not found.")
+    pin = payload.pin or _generate_pin()
     token = secrets.token_urlsafe(24)
     share = Share(
         token=token,
         file_id=file.id,
         version=version,
         owner_id=current.id,
+        recipient_email=payload.recipient_email,
         expires_at=expires_at,
         max_uses=payload.max_uses,
         password_hash=hash_verifier(payload.password) if payload.password else None,
+        pin_hash=hash_verifier(pin),
     )
     db.add(share)
     db.commit()
     db.refresh(share)
-    return share_public(share, _share_url(token))
+    return share_public(share, _share_url(token), pin=pin)
 
 
 @router.get("")
@@ -112,8 +169,47 @@ def list_shares(
     return [share_public(share, _share_url(share.token)) for share in shares]
 
 
+@router.get("/received")
+def list_received_shares(
+    current: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    email = current.email.lower()
+    shares = list(
+        db.scalars(
+            select(Share)
+            .where(func.lower(Share.recipient_email) == email)
+            .order_by(Share.created_at.desc())
+        ).all()
+    )
+    results: list[dict[str, Any]] = []
+    for share in shares:
+        file = db.get(FileObject, share.file_id)
+        if file is None or file.deleted_at is not None:
+            continue
+        record = db.scalar(
+            select(FileVersion).where(
+                FileVersion.file_id == share.file_id,
+                FileVersion.version == share.version,
+            )
+        )
+        if record is None:
+            continue
+        item = share_public(share, _share_url(share.token))
+        item["owner_id"] = share.owner_id
+        item["ciphertext_size"] = record.ciphertext_size
+        item["profile"] = record.profile
+        item["file_deleted"] = False
+        results.append(item)
+    return results
+
+
 @router.get("/{token}")
-def public_share_info(token: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+def public_share_info(
+    token: str,
+    db: Session = Depends(get_db),
+    current: AuthenticatedUser | None = Depends(get_optional_user),
+) -> dict[str, Any]:
     share = db.get(Share, token)
     if share is None:
         raise HTTPException(status_code=404, detail="Share not found.")
@@ -129,6 +225,7 @@ def public_share_info(token: str, db: Session = Depends(get_db)) -> dict[str, An
     )
     if record is None:
         raise HTTPException(status_code=410, detail="Shared version is no longer available.")
+    recipient_match = _is_recipient(share, current)
     return {
         "token": share.token,
         "file_id": share.file_id,
@@ -139,6 +236,10 @@ def public_share_info(token: str, db: Session = Depends(get_db)) -> dict[str, An
         "expires_at": share.expires_at.isoformat() if share.expires_at else None,
         "remaining_uses": max(0, share.max_uses - share.uses),
         "password_protected": bool(share.password_hash),
+        "pin_protected": bool(share.pin_hash),
+        "pin_required": bool(share.pin_hash) and not recipient_match,
+        "recipient_email": share.recipient_email,
+        "recipient_match": recipient_match,
         "download_url": f"/api/shares/{share.token}/download",
     }
 
@@ -148,15 +249,21 @@ def download_shared_file(
     token: str,
     payload: DownloadShareRequest | None = None,
     db: Session = Depends(get_db),
+    current: AuthenticatedUser | None = Depends(get_optional_user),
 ) -> StreamingResponse:
     share = db.get(Share, token)
     if share is None:
         raise HTTPException(status_code=404, detail="Share not found.")
     _validate_share(share)
+    recipient_match = _is_recipient(share, current)
     if share.password_hash:
         password = payload.password if payload else None
         if not password or not verify_verifier(password, share.password_hash):
             raise HTTPException(status_code=401, detail="Incorrect share passphrase.")
+    if share.pin_hash and not recipient_match:
+        pin = payload.pin if payload else None
+        if not pin or not verify_verifier(pin, share.pin_hash):
+            raise HTTPException(status_code=401, detail="Incorrect share PIN.")
     file = db.get(FileObject, share.file_id)
     if file is None or file.deleted_at is not None:
         raise HTTPException(status_code=410, detail="Shared file is no longer available.")
@@ -183,6 +290,59 @@ def download_shared_file(
     )
 
 
+@router.patch("/{token}/pin")
+def update_share_pin(
+    token: str,
+    payload: UpdatePinRequest,
+    current: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    share = db.get(Share, token)
+    if share is None:
+        raise HTTPException(status_code=404, detail="Share not found.")
+    _require_owner_or_admin(share, current)
+    pin = payload.pin or _generate_pin()
+    share.pin_hash = hash_verifier(pin)
+    db.commit()
+    db.refresh(share)
+    return share_public(share, _share_url(token), pin=pin)
+
+
+@router.post("/{token}/regenerate")
+def regenerate_share_link(
+    token: str,
+    current: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    share = db.get(Share, token)
+    if share is None:
+        raise HTTPException(status_code=404, detail="Share not found.")
+    _require_owner_or_admin(share, current)
+    if share.revoked:
+        raise HTTPException(status_code=409, detail="Cannot regenerate a revoked share.")
+    new_token = secrets.token_urlsafe(24)
+    # Primary key change: create new row, delete old
+    new_share = Share(
+        token=new_token,
+        file_id=share.file_id,
+        version=share.version,
+        owner_id=share.owner_id,
+        recipient_email=share.recipient_email,
+        expires_at=share.expires_at,
+        max_uses=share.max_uses,
+        uses=share.uses,
+        password_hash=share.password_hash,
+        pin_hash=share.pin_hash,
+        revoked=share.revoked,
+        created_at=share.created_at,
+    )
+    db.add(new_share)
+    db.delete(share)
+    db.commit()
+    db.refresh(new_share)
+    return share_public(new_share, _share_url(new_token))
+
+
 @router.delete("/{token}")
 def revoke_share(
     token: str,
@@ -192,8 +352,7 @@ def revoke_share(
     share = db.get(Share, token)
     if share is None:
         raise HTTPException(status_code=404, detail="Share not found.")
-    if share.owner_id != current.id and current.role != "admin":
-        raise HTTPException(status_code=403, detail="Cannot revoke another user's share.")
+    _require_owner_or_admin(share, current)
     share.revoked = True
     db.commit()
     return {"status": "revoked", "token": token}
