@@ -73,11 +73,11 @@ Web dev server proxies `/api`, `/health`, `/ready` to `127.0.0.1:8000`.
 Services installed on this machine:
 - `cryptavault-api.service`
 - `cryptavault-web.service`
-- `cloudflared.service`
+- `cloudflare-cryptavault.service` (Cloudflare tunnel; token at `/etc/cloudflared/token`, root-only)
 
 Check:
 ```bash
-systemctl status cryptavault-api cryptavault-web cloudflared --no-pager
+systemctl status cryptavault-api cryptavault-web cloudflare-cryptavault --no-pager
 ```
 
 ## 6. Web App Features
