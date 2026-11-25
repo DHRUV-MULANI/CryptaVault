@@ -1,6 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Required for the app to reach the CryptaVault API in release builds. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
-        android:label="cryptavault_mobile"
+        android:label="CryptaVault"
+        android:usesCleartextTraffic="true"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

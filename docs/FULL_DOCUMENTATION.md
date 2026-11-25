@@ -193,6 +193,7 @@ So `flutter` and `dart` work in new shells. For web builds set `CHROME_EXECUTABL
 - **Workspaces**: list/select/create workspaces in Settings.
 - **Status**: dashboard counters, storage mix, system health, feature flags, and admin user controls (suspend/role) when signed in as admin.
 - **Zero-knowledge**: master key lives only in memory; JWT in `flutter_secure_storage`. The server URL defaults to `https://cryptavault.dhruvmulani.com` and can be changed in Settings.
+- **Android networking**: the release manifest permits cleartext traffic so a local/LAN API URL works during development. Use the HTTPS public URL (or an HTTPS reverse proxy) on untrusted networks; plaintext files and keys are never sent either way.
 
 ### Layout
 
