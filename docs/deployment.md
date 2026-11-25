@@ -127,6 +127,8 @@ For production, run behind a TLS-terminating reverse proxy and set:
 | `CRYPTAVAULT_CORS_ORIGINS` | If portal is on another origin | Comma-separated origins |
 | `REDIS_URL` | Optional | Shared rate-limit backend |
 
+For the public Cloudflare deployment, `PUBLIC_SHARE_DOMAIN` is set to `https://cryptavault.dhruvmulani.com`. Without it, share links and QR codes default to `http://localhost:3000` and are unusable off this machine.
+
 Never commit `.env` files or credentials. The repository's `.env` is a development placeholder; review it before any public deployment.
 
 The current share, user, manifest, and audit stores may be in-memory depending on the route. Production requires durable database-backed stores and a shared rate limiter. The API is not a substitute for the client-side encryption boundary.

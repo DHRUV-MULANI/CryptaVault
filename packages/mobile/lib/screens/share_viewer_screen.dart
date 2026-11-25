@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 
 import '../services/crypto_service.dart' as crypto;
+import '../services/share_link.dart';
 import '../state/vault_provider.dart';
 
 class ShareViewerScreen extends StatefulWidget {
@@ -24,6 +25,10 @@ class _ShareViewerScreenState extends State<ShareViewerScreen> {
   String? _error;
   String? _token;
   String? _keyB64Url;
+  String? _fileName;
+  String? _fileType;
+  String? _fileHash;
+  int? _fileSize;
   bool _needsPin = false;
   bool _needsPassword = false;
   Map<String, dynamic>? _info;
@@ -50,36 +55,22 @@ class _ShareViewerScreenState extends State<ShareViewerScreen> {
       setState(() {
         _token = null;
         _keyB64Url = null;
+        _fileName = null;
+        _fileType = null;
+        _fileHash = null;
+        _fileSize = null;
         _error = 'Paste a share link first.';
       });
       return;
     }
-    String token;
-    String? key;
-    final fragmentMatch = RegExp(r'#/s/([^?\s]+)(?:\?([^#\s]*))?').firstMatch(raw);
-    if (fragmentMatch != null) {
-      token = Uri.decodeComponent(fragmentMatch.group(1)!);
-      final query = fragmentMatch.group(2) ?? '';
-      for (final part in query.split('&')) {
-        final kv = part.split('=');
-        if (kv.length == 2 && kv[0] == 'k') {
-          key = Uri.decodeComponent(kv[1]);
-        }
-      }
-    } else {
-      final uri = Uri.tryParse(raw);
-      final segments = uri?.pathSegments ?? [];
-      final idx = segments.indexOf('s');
-      if (uri != null && idx >= 0 && idx + 1 < segments.length) {
-        token = segments[idx + 1];
-        key = uri.queryParameters['k'];
-      } else {
-        token = raw;
-      }
-    }
+    final parsed = parseServerShareLink(raw);
     setState(() {
-      _token = token;
-      _keyB64Url = key;
+      _token = parsed.token;
+      _keyB64Url = parsed.keyB64Url;
+      _fileName = parsed.name;
+      _fileType = parsed.type;
+      _fileHash = parsed.hash;
+      _fileSize = parsed.size;
       _error = null;
       _info = null;
       _needsPin = false;
@@ -98,7 +89,7 @@ class _ShareViewerScreenState extends State<ShareViewerScreen> {
       if (!mounted) return;
       setState(() {
         _info = info;
-        _needsPin = info['pin_protected'] == true;
+        _needsPin = info['pin_required'] == true;
         _needsPassword = info['password_protected'] == true;
       });
     } catch (e) {
@@ -111,8 +102,10 @@ class _ShareViewerScreenState extends State<ShareViewerScreen> {
   Future<void> _download(VaultProvider v) async {
     if (_token == null) return;
     if (_keyB64Url == null || _keyB64Url!.isEmpty) {
-      setState(() => _error =
-          'Missing decryption key. The full link must include #...?k=<key>.');
+      setState(
+        () => _error =
+            'Missing decryption key. The full link must include #...?k=<key>.',
+      );
       return;
     }
     if (_needsPin && _pin.text.trim().length != 8) {
@@ -134,9 +127,28 @@ class _ShareViewerScreenState extends State<ShareViewerScreen> {
         Map<String, dynamic>.from(jsonDecode(utf8.decode(ciphertext)) as Map),
       );
       final bytes = await crypto.decryptContainer(container, rawKey);
-      final dir = await getDownloadsDirectory() ??
+      if (_fileHash != null && _fileHash!.isNotEmpty) {
+        final actual = await crypto.sha256Hex(bytes);
+        if (actual != _fileHash) {
+          throw Exception(
+            'Integrity check failed: decrypted file hash does not match.',
+          );
+        }
+      }
+      if (_fileSize != null && bytes.length != _fileSize) {
+        throw Exception(
+          'Integrity check failed: decrypted file size does not match.',
+        );
+      }
+      final dir =
+          await getDownloadsDirectory() ??
           await getApplicationDocumentsDirectory();
-      var name = 'cryptavault-${_token!.substring(0, 8)}';
+      final tokenPart = _token!.length > 8 ? _token!.substring(0, 8) : _token!;
+      final name = safeShareFileName(
+        _fileName != null && _fileName!.isNotEmpty
+            ? _fileName!
+            : 'cryptavault-$tokenPart',
+      );
       final out = File('${dir.path}${Platform.pathSeparator}$name');
       await out.writeAsBytes(bytes);
       if (mounted) {
@@ -162,7 +174,7 @@ class _ShareViewerScreenState extends State<ShareViewerScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text(
-              'Paste the full share link. The decryption key after #k= stays on this device.',
+              'Paste the full share link. The key and original file name stay in the link fragment and never go to the server.',
               style: TextStyle(color: Colors.white70),
             ),
             const SizedBox(height: 12),
@@ -175,10 +187,7 @@ class _ShareViewerScreenState extends State<ShareViewerScreen> {
               maxLines: 2,
             ),
             const SizedBox(height: 8),
-            OutlinedButton(
-              onPressed: _parse,
-              child: const Text('Parse link'),
-            ),
+            OutlinedButton(onPressed: _parse, child: const Text('Parse link')),
             if (_token != null) ...[
               const SizedBox(height: 16),
               Card(
@@ -187,6 +196,22 @@ class _ShareViewerScreenState extends State<ShareViewerScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
+                      if (_fileName != null && _fileName!.isNotEmpty)
+                        Text(
+                          _fileName!,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      if (_fileType != null && _fileType!.isNotEmpty)
+                        Text(
+                          '${_fileType!} · ${_fileSize ?? '?'} bytes',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: Colors.white60,
+                          ),
+                        ),
                       SelectableText(
                         'Token: $_token',
                         style: const TextStyle(fontSize: 12),
@@ -194,7 +219,9 @@ class _ShareViewerScreenState extends State<ShareViewerScreen> {
                       Text(
                         'Key fragment: ${_keyB64Url != null ? 'present' : 'MISSING'}',
                         style: TextStyle(
-                          color: _keyB64Url != null ? Colors.greenAccent : Colors.redAccent,
+                          color: _keyB64Url != null
+                              ? Colors.greenAccent
+                              : Colors.redAccent,
                           fontSize: 12,
                         ),
                       ),
@@ -202,7 +229,10 @@ class _ShareViewerScreenState extends State<ShareViewerScreen> {
                         Text(
                           'Expires: ${_info!['expires_at'] ?? 'never'} · '
                           'Uses left: ${_info!['remaining_uses'] ?? '?'}',
-                          style: const TextStyle(fontSize: 11, color: Colors.white60),
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: Colors.white60,
+                          ),
                         ),
                       const SizedBox(height: 8),
                       FilledButton(
@@ -213,7 +243,9 @@ class _ShareViewerScreenState extends State<ShareViewerScreen> {
                         const SizedBox(height: 12),
                         TextField(
                           controller: _pin,
-                          decoration: const InputDecoration(labelText: '8-digit PIN'),
+                          decoration: const InputDecoration(
+                            labelText: '8-digit PIN',
+                          ),
                           keyboardType: TextInputType.number,
                           maxLength: 8,
                         ),
@@ -222,7 +254,9 @@ class _ShareViewerScreenState extends State<ShareViewerScreen> {
                         const SizedBox(height: 8),
                         TextField(
                           controller: _password,
-                          decoration: const InputDecoration(labelText: 'Password'),
+                          decoration: const InputDecoration(
+                            labelText: 'Password',
+                          ),
                           obscureText: true,
                         ),
                       ],

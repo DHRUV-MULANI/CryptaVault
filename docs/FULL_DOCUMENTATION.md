@@ -97,7 +97,7 @@ systemctl status cryptavault-api cryptavault-web cloudflare-cryptavault --no-pag
 - Create server-enforced share links with expiry, max uses, optional password, revocation, optional recipient email, and 8-digit PIN.
 - PIN is auto-assigned if omitted; owner can change PIN or regenerate link. PIN is stored as server-side hash (access control), not a file encryption key.
 - Recipient email: when that user is logged in, PIN is bypassed; other users must enter PIN.
-- Share link includes decryption key in URL fragment (`#...k=...`) so server does not receive key. QR code is generated for sharing.
+- Share link includes decryption key and original file metadata (name, MIME, size, SHA-256) in the URL fragment (`#...k=...&n=...&t=...&s=...&h=...`) so the server receives none of it. QR code is generated client-side from the complete link.
 - "Share all" can create shares for all files in current workspace.
 - "Shared with me" tab lists shares addressed to the logged-in user's email.
 
@@ -188,8 +188,8 @@ So `flutter` and `dart` work in new shells. For web builds set `CHROME_EXECUTABL
 
 - **Auth**: register/login with client-derived `auth_verifier`, vault check (`cryptavault:verifier:v1` under AAD `vault:verifier`), lock/unlock, sign out.
 - **Vault**: list decrypted metadata, upload with encryption profile + folder, download/decrypt with SHA-256 verification, trash/restore/permanent delete, folder filter/search.
-- **Shares**: create with recipient email, 8-digit PIN (auto-assigned), password, expiry, max uses; copy link with `#k=` key fragment, QR code, native share sheet, change PIN, regenerate (invalidates old token), revoke, "Shared with me" inbox.
-- **Share viewer**: paste a full share link, parse token/key fragment, PIN/password prompt, recipient-email bypass, download and decrypt locally.
+- **Shares**: create with recipient email, 8-digit PIN (auto-assigned), password, expiry, max uses; copy link with `#k=` key and original-name metadata, locally generated QR code, native share sheet, change PIN, regenerate (invalidates old token), revoke, "Shared with me" inbox.
+- **Share viewer**: paste a full share link, parse token/key/name fragment, PIN/password prompt, recipient-email bypass, download and decrypt locally, verify hash, and save under the original filename.
 - **Workspaces**: list/select/create workspaces in Settings.
 - **Status**: dashboard counters, storage mix, system health, feature flags, and admin user controls (suspend/role) when signed in as admin.
 - **Zero-knowledge**: master key lives only in memory; JWT in `flutter_secure_storage`. The server URL defaults to `https://cryptavault.dhruvmulani.com` and can be changed in Settings.

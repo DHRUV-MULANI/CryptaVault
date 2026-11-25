@@ -1,17 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
+import * as QRCode from 'qrcode';
 import { Copy, Link2, LockKeyhole, Plus, QrCode, RefreshCw, Share2, ShieldOff, KeyRound, Mail, RotateCcw } from 'lucide-react';
 import { api, type ApiShare, type ApiFile } from '../lib/api';
 import { useVault } from '../lib/vault';
-import { bytesToB64Url, openJson, unwrapRawKey } from '../lib/crypto';
+import { bytesToB64Url, openJson, serverShareLink, unwrapRawKey } from '../lib/crypto';
 import type { FileMeta } from '../lib/types';
 import { Badge, Card, EmptyState, Modal, PageHeader, Spinner, useToast } from '../components/ui';
 import { formatDate, relativeTime } from '../lib/format';
 
-const API_URL = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/+$/, '') ?? '';
-
-function makeShareLink(token: string, keyB64Url: string): string {
-  const base = window.location.origin + window.location.pathname;
-  return `${base}#/s/${token}?k=${keyB64Url}`;
+function makeShareLink(token: string, keyB64Url: string, meta?: FileMeta): string {
+  return serverShareLink(token, keyB64Url, meta
+    ? { name: meta.name, type: meta.type, size: meta.size, hash: meta.hash }
+    : undefined);
 }
 
 export default function SharesPage(): JSX.Element {
@@ -31,6 +31,7 @@ export default function SharesPage(): JSX.Element {
   const [pin, setPin] = useState('');
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<{ link: string; pin?: string; token: string } | null>(null);
+  const [qrSrc, setQrSrc] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -58,6 +59,18 @@ export default function SharesPage(): JSX.Element {
 
   useEffect(() => { void load(); }, [currentWorkspace?.id, key]);
 
+  useEffect(() => {
+    if (!created?.link) { setQrSrc(null); return; }
+    let active = true;
+    QRCode.toDataURL(created.link, {
+      width: 512,
+      margin: 2,
+      errorCorrectionLevel: 'M',
+      color: { dark: '#000000ff', light: '#ffffffff' },
+    }).then((url) => { if (active) setQrSrc(url); }).catch(() => { if (active) setQrSrc(null); });
+    return () => { active = false; };
+  }, [created?.link]);
+
   async function createShare(e: React.FormEvent) {
     e.preventDefault();
     if (!key || !fileId) return;
@@ -73,11 +86,11 @@ export default function SharesPage(): JSX.Element {
         recipient_email: recipientEmail.trim() || null,
         pin: pin.trim() || null,
       });
-      const file = files.find((f) => f.api.id === fileId)?.api;
+      const file = files.find((f) => f.api.id === fileId);
       let link = share.share_url;
       if (file) {
-        const rawKey = await unwrapRawKey(key, { ivB64: file.wrapped_iv, ctB64: file.wrapped_key }, `filekey:${file.id}`);
-        link = makeShareLink(share.token, bytesToB64Url(rawKey));
+        const rawKey = await unwrapRawKey(key, { ivB64: file.api.wrapped_iv, ctB64: file.api.wrapped_key }, `filekey:${file.api.id}`);
+        link = makeShareLink(share.token, bytesToB64Url(rawKey), file.meta);
       }
       setCreated({ link, pin: share.pin, token: share.token });
       notify('Share created', 'success');
@@ -97,7 +110,7 @@ export default function SharesPage(): JSX.Element {
       for (const f of files) {
         const share = await api.shares.create({ file_id: f.api.id, expires_at: expiresAt, max_uses: maxUses, password: password || null, recipient_email: recipientEmail.trim() || null, pin: pin.trim() || null });
         const rawKey = await unwrapRawKey(key, { ivB64: f.api.wrapped_iv, ctB64: f.api.wrapped_key }, `filekey:${f.api.id}`);
-        links.push(`${f.meta.name}\n${makeShareLink(share.token, bytesToB64Url(rawKey))}\nPIN: ${share.pin ?? '(none)'}`);
+        links.push(`${f.meta.name}\n${makeShareLink(share.token, bytesToB64Url(rawKey), f.meta)}\nPIN: ${share.pin ?? '(none)'}`);
       }
       setCreated({ link: links.join('\n\n'), token: '' });
       notify(`Created ${links.length} share(s)`, 'success');
@@ -127,11 +140,11 @@ export default function SharesPage(): JSX.Element {
     if (!confirm('Regenerate share link? The old link will stop working.')) return;
     try {
       const updated = await api.shares.regenerate(s.token);
-      const file = files.find((f) => f.api.id === updated.file_id)?.api;
+      const file = files.find((f) => f.api.id === updated.file_id);
       let link = updated.share_url;
       if (file && key) {
-        const rawKey = await unwrapRawKey(key, { ivB64: file.wrapped_iv, ctB64: file.wrapped_key }, `filekey:${file.id}`);
-        link = makeShareLink(updated.token, bytesToB64Url(rawKey));
+        const rawKey = await unwrapRawKey(key, { ivB64: file.api.wrapped_iv, ctB64: file.api.wrapped_key }, `filekey:${file.api.id}`);
+        link = makeShareLink(updated.token, bytesToB64Url(rawKey), file.meta);
       }
       setCreated({ link, pin: updated.pin, token: updated.token });
       setCreateOpen(true);
@@ -145,8 +158,19 @@ export default function SharesPage(): JSX.Element {
     notify(label, 'success');
   }
 
+  async function nativeShare(text: string) {
+    if (typeof navigator.share === 'function') {
+      try {
+        await navigator.share({ title: 'CryptaVault secure share', text });
+        return;
+      } catch {
+        // User cancelled or the browser rejected the share sheet; fall back to copy.
+      }
+    }
+    await copy(text, 'Link copied');
+  }
+
   const active = useMemo(() => shares.filter((s) => !s.revoked && (!s.expires_at || new Date(s.expires_at).getTime() > Date.now()) && s.remaining_uses > 0).length, [shares]);
-  const qrSrc = created?.token ? `${API_URL || ''}/api/shares/${created.token}/qr?key=${encodeURIComponent(created.link.split('k=')[1] ?? '')}` : null;
 
   return (
     <div className="animate-in">
@@ -194,7 +218,7 @@ export default function SharesPage(): JSX.Element {
                 <td className="px-4 py-3 text-slate-400">{s.expires_at ? formatDate(s.expires_at) : 'Never'}</td>
                 <td className="px-4 py-3 text-slate-400">{s.uses}/{s.max_uses}</td>
                 <td className="px-4 py-3"><Badge className={status === 'Active' ? 'badge-emerald' : status === 'Revoked' ? 'badge-rose' : 'badge-amber'}>{status}</Badge></td>
-                <td className="px-4 py-3"><div className="flex justify-end gap-1">{status === 'Active' && <><button className="btn-ghost !p-2" title="Copy link" onClick={() => { const f = files.find((x) => x.api.id === s.file_id); if (f && key) { void unwrapRawKey(key, { ivB64: f.api.wrapped_iv, ctB64: f.api.wrapped_key }, `filekey:${f.api.id}`).then((rk) => copy(makeShareLink(s.token, bytesToB64Url(rk)), 'Link copied')); } else { void copy(s.share_url, 'Link copied'); } }}><Copy className="h-4 w-4" /></button><button className="btn-ghost !p-2" title="Change PIN" onClick={() => void changePin(s)}><KeyRound className="h-4 w-4" /></button><button className="btn-ghost !p-2" title="Regenerate link" onClick={() => void regenerate(s)}><RotateCcw className="h-4 w-4" /></button><button className="btn-ghost !p-2" title="Revoke" onClick={() => void revoke(s.token)}><ShieldOff className="h-4 w-4" /></button></>}</div></td>
+                <td className="px-4 py-3"><div className="flex justify-end gap-1">{status === 'Active' && <><button className="btn-ghost !p-2" title="Copy link" onClick={() => { const f = files.find((x) => x.api.id === s.file_id); if (f && key) { void unwrapRawKey(key, { ivB64: f.api.wrapped_iv, ctB64: f.api.wrapped_key }, `filekey:${f.api.id}`).then((rk) => copy(makeShareLink(s.token, bytesToB64Url(rk), f.meta), 'Link copied')); } else { void copy(s.share_url, 'Link copied'); } }}><Copy className="h-4 w-4" /></button><button className="btn-ghost !p-2" title="Change PIN" onClick={() => void changePin(s)}><KeyRound className="h-4 w-4" /></button><button className="btn-ghost !p-2" title="Regenerate link" onClick={() => void regenerate(s)}><RotateCcw className="h-4 w-4" /></button><button className="btn-ghost !p-2" title="Revoke" onClick={() => void revoke(s.token)}><ShieldOff className="h-4 w-4" /></button></>}</div></td>
               </tr>
             );
           })}
@@ -209,8 +233,9 @@ export default function SharesPage(): JSX.Element {
             <label className="block"><span className="mb-1.5 block text-xs font-medium text-slate-300">Share link (includes decryption key fragment)</span><textarea className="input min-h-[72px] text-xs" readOnly value={created.link} /></label>
             <div className="flex flex-wrap gap-2">
               <button className="btn-primary" onClick={() => void copy(created.link, 'Link copied')}><Copy className="h-4 w-4" /> Copy link</button>
+              <button className="btn-secondary" onClick={() => void nativeShare(created.link)}><Share2 className="h-4 w-4" /> Share</button>
               {created.pin && <button className="btn-secondary" onClick={() => void copy(created.pin!, 'PIN copied')}><KeyRound className="h-4 w-4" /> Copy PIN</button>}
-              {qrSrc && <a className="btn-secondary" href={qrSrc} target="_blank" rel="noreferrer"><QrCode className="h-4 w-4" /> QR</a>}
+              {qrSrc && <a className="btn-secondary" href={qrSrc} download="cryptavault-share-qr.png"><QrCode className="h-4 w-4" /> QR</a>}
               <button className="btn-secondary" onClick={() => { setCreateOpen(false); setCreated(null); }}>Done</button>
             </div>
             {qrSrc && <div className="flex justify-center rounded-xl border border-white/10 bg-white p-3"><img src={qrSrc} alt="Share QR" className="h-44 w-44" /></div>}

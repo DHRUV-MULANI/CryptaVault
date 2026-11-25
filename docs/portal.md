@@ -19,7 +19,7 @@ The GitHub Pages workflow can publish the SPA assets, but the dynamic portal nee
 | `#/vault` | Vault | Upload, download, versions, trash, rename, shares |
 | `#/shares` | Shares | Server shares, revocation, locally saved share links |
 | `#/workspaces` | Workspaces | Create/select workspaces, members, roles, storage targets |
-| `#/s/<token>` | Share viewer | Public server-share decryptor driven by `m`/`k` URL fragments |
+| `#/s/<token>` | Share viewer | Public server-share decryptor driven by `k`/`n`/`t`/`s`/`h` URL fragments |
 | `#/catalog` | Catalog | Browse the 88 catalog algorithms and six profiles |
 | `#/academy` | Academy | Zero-knowledge and adaptive-crypto explainer |
 | `#/admin` | Admin | Admin-only users, quotas, roles, suspension, flags, storage health |
@@ -137,18 +137,18 @@ The wrapped `key` contains the raw file key sealed with the share key under `sha
 The generated link has this form:
 
 ```text
-http://localhost:3000/#/s/<token>?m=<base64url-json-manifest>&k=<base64url-share-key>
+https://cryptavault.dhruvmulani.com/#/s/<token>?k=<base64url-share-key>&n=<name>&t=<mime>&s=<size>&h=<sha256>
 ```
 
-The server never receives `m` or `k`, so Neon cannot reconstruct a decryptable URL. The creating browser saves links under `cryptavault.share.link.{token}`. Another browser can still use a copied link; it just cannot reconstruct it from the server share list.
+The server never receives `k`, `n`, `t`, `s`, or `h`: they live after `#` and are not sent in HTTP requests. The creating browser saves links under `cryptavault.share.link.{token}`. Another browser can still use a copied link; it just cannot reconstruct it from the server share list.
 
 ### Public viewer
 
-The viewer parses the token, manifest, and optional capability key from the URL, fetches share policy from `/api/shares/<token>`, prompts for a passphrase when required, downloads ciphertext from `/api/shares/<token>/download`, decrypts, verifies SHA-256, and saves the file.
+The viewer parses the token, capability key, and optional original filename/MIME/size/hash from the URL fragment, fetches share policy from `/api/shares/<token>`, prompts for a password or 8-digit PIN when required, downloads ciphertext from `/api/shares/<token>/download`, decrypts, verifies the SHA-256 from `h` when present, and saves the file under its original name from `n`.
 
-Legacy static links using `#/share?d=` are not supported by the dynamic viewer because they contain a self-contained container manifest rather than a server share token.
+Legacy static links using `#/share?d=` remain supported: they carry a self-contained container manifest, and the viewer decrypts them entirely in the browser.
 
-The QR endpoint remains policy-only: it encodes the share URL with an optional `k` parameter but cannot embed `m`. Treat QR as a convenience for passphrase/link metadata, not a complete capability link unless the manifest is delivered separately.
+QR codes are generated client-side from the complete share link, including the key and metadata fragment. The key is never sent to `/api/shares/<token>/qr`.
 
 ## Workspaces and roles
 

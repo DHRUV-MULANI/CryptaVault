@@ -1,24 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, ArrowLeft, Check, Download, FileUp, LockKeyhole, ShieldCheck } from 'lucide-react';
 import { api } from '../lib/api';
-import { b64UrlToBytes, decryptContainer, decryptShare, parseShareBundle, readShareFromLocation, type ParsedShare } from '../lib/crypto';
+import { b64UrlToBytes, decryptContainer, decryptShare, parseShareBundle, readServerShareFromLocation, readShareFromLocation, safeDownloadName, sha256Hex, type ParsedShare, type ServerShareLocation } from '../lib/crypto';
 import { downloadBlob, formatBytes } from '../lib/format';
 import { Card, ProgressBar, Spinner } from '../components/ui';
 
 const BUNDLE_KEY = 'cryptavault_open_bundle';
 
-function getServerShareFromHash(): { token: string; keyB64Url: string | null } | null {
-  const hash = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash;
-  const [path, query = ''] = hash.split('?');
-  const m = path.match(/^\/s\/([^/]+)/);
-  if (!m) return null;
-  const params = new URLSearchParams(query);
-  return { token: m[1], keyB64Url: params.get('k') };
-}
-
 export default function ShareViewer(): JSX.Element {
   const [parsed, setParsed] = useState<ParsedShare | null>(null);
-  const [serverShare, setServerShare] = useState<{ token: string; keyB64Url: string | null } | null>(null);
+  const [serverShare, setServerShare] = useState<ServerShareLocation | null>(null);
   const [serverInfo, setServerInfo] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [passphrase, setPassphrase] = useState('');
@@ -33,7 +24,7 @@ export default function ShareViewer(): JSX.Element {
   useEffect(() => {
     const fromLocation = readShareFromLocation();
     if (fromLocation) { setParsed(fromLocation); return; }
-    const srv = getServerShareFromHash();
+    const srv = readServerShareFromLocation();
     if (srv) {
       setServerShare(srv);
       void api.shares.info(srv.token).then(setServerInfo).catch((e) => setError(e instanceof Error ? e.message : 'Failed to load share'));
@@ -74,9 +65,15 @@ export default function ShareViewer(): JSX.Element {
       const container = JSON.parse(new TextDecoder().decode(bytes));
       const rawKey = b64UrlToBytes(serverShare.keyB64Url);
       const plaintext = await decryptContainer(container, rawKey, setProgress);
-      const name = String(serverInfo?.file_id ?? 'shared-file') + '.bin';
-      // If container/meta had name we'd use it; server share info doesn't include decrypted name. Use generic.
-      downloadBlob(plaintext, name, 'application/octet-stream');
+      if (serverShare.meta.hash) {
+        const actual = await sha256Hex(plaintext);
+        if (actual !== serverShare.meta.hash) {
+          throw new Error('Integrity check failed: the decrypted file does not match its hash.');
+        }
+      }
+      const name = safeDownloadName(serverShare.meta.name ?? `${String(serverInfo?.file_id ?? 'shared-file')}.bin`);
+      const type = serverShare.meta.type || 'application/octet-stream';
+      downloadBlob(plaintext, name, type);
       setDone({ name, size: plaintext.length });
     } catch (err) { setError(err instanceof Error ? err.message : 'Download/decrypt failed.'); }
     finally { setDecrypting(false); }
@@ -123,7 +120,14 @@ export default function ShareViewer(): JSX.Element {
           <div className="space-y-4">
             {serverShare && (
               <Card className="!p-4">
-                <div className="text-sm font-medium text-white">Server share</div>
+                <div className="text-sm font-medium text-white">
+                  {serverShare.meta.name ?? 'Server share'}
+                </div>
+                <div className="mt-1 text-xs text-slate-400">
+                  {serverShare.meta.name
+                    ? `${formatBytes(serverShare.meta.size ?? 0)} · ${serverShare.meta.type ?? 'application/octet-stream'}`
+                    : 'File name not included in this older link; download will use a generic name.'}
+                </div>
                 <div className="mt-1 text-xs text-slate-400">Token: <span className="mono">{serverShare.token.slice(0, 16)}…</span></div>
                 {serverInfo && <div className="mt-2 grid gap-2 sm:grid-cols-2 text-[11px] text-slate-400">
                   <div>Password: {serverInfo.password_protected ? 'required' : 'none'}</div>

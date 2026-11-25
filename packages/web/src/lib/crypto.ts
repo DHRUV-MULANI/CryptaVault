@@ -374,6 +374,61 @@ export function shareBaseUrl(): string {
   return `${origin}${path}#/share`;
 }
 
+export interface ShareLinkMeta {
+  name?: string;
+  type?: string;
+  size?: number;
+  hash?: string;
+}
+
+export function serverShareLink(
+  token: string,
+  keyB64Url: string,
+  meta?: ShareLinkMeta,
+): string {
+  const base = import.meta.env.BASE_URL || '/';
+  const origin = window.location.origin;
+  const path = base.endsWith('/') ? base : `${base}/`;
+  const params = new URLSearchParams({ k: keyB64Url });
+  if (meta?.name) params.set('n', meta.name);
+  if (meta?.type) params.set('t', meta.type);
+  if (meta?.size !== undefined) params.set('s', String(meta.size));
+  if (meta?.hash) params.set('h', meta.hash);
+  return `${origin}${path}#/s/${encodeURIComponent(token)}?${params.toString()}`;
+}
+
+export interface ServerShareLocation {
+  token: string;
+  keyB64Url: string | null;
+  meta: ShareLinkMeta;
+}
+
+export function readServerShareFromLocation(): ServerShareLocation | null {
+  const hash = window.location.hash.startsWith('#')
+    ? window.location.hash.slice(1)
+    : window.location.hash;
+  const [path, query = ''] = hash.split('?');
+  const match = path.match(/^\/s\/([^/]+)/);
+  if (!match) return null;
+  const params = new URLSearchParams(query);
+  const sizeRaw = params.get('s');
+  return {
+    token: match[1],
+    keyB64Url: params.get('k'),
+    meta: {
+      name: params.get('n') ?? undefined,
+      type: params.get('t') ?? undefined,
+      size: sizeRaw !== null && sizeRaw !== '' ? Number(sizeRaw) : undefined,
+      hash: params.get('h') ?? undefined,
+    },
+  };
+}
+
+export function safeDownloadName(name: string): string {
+  const cleaned = name.replace(/[\\/\u0000-\u001f]/g, '_').trim();
+  return cleaned || 'shared-file';
+}
+
 export function buildShareLink(payload: SharePayload, shareRawKey?: Bytes): string {
   const token = sharePayloadToken(payload);
   const url = `${shareBaseUrl()}?d=${token}`;

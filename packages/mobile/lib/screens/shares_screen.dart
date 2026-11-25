@@ -6,6 +6,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../models/types.dart';
 import '../services/crypto_service.dart';
+import '../services/share_link.dart';
 import '../state/vault_provider.dart';
 import 'share_viewer_screen.dart';
 
@@ -22,6 +23,7 @@ class _SharesScreenState extends State<SharesScreen>
   bool _busy = false;
   String? _error;
   List<ApiFile> _files = [];
+  final Map<String, FileMeta> _metas = {};
   List<ApiShare> _mine = [];
   List<ApiShare> _received = [];
   String? _loadedWorkspace;
@@ -57,9 +59,26 @@ class _SharesScreenState extends State<SharesScreen>
       } catch (_) {
         // Recipient inbox is best-effort; older servers may not expose it.
       }
+      final metas = <String, FileMeta>{};
+      for (final file in files) {
+        if (file.deletedAt != null) continue;
+        try {
+          final meta = await openJson(
+            v.masterKey!,
+            Sealed(ivB64: file.metaIv, ctB64: file.encryptedMeta),
+            aad: 'filemeta:${file.id}',
+          );
+          metas[file.id] = FileMeta.fromJson(meta);
+        } catch (_) {
+          // Keep the file selectable even if its metadata cannot be opened.
+        }
+      }
       if (!mounted) return;
       setState(() {
         _files = files;
+        _metas
+          ..clear()
+          ..addAll(metas);
         _mine = mine;
         _received = received;
         _loadedWorkspace = ws;
@@ -84,6 +103,10 @@ class _SharesScreenState extends State<SharesScreen>
         Sealed(ivB64: file.wrappedIv, ctB64: file.wrappedKey),
         'filekey:${file.id}',
       );
+      final meta = _metas[share.fileId];
+      if (meta != null) {
+        return buildServerShareLink(base, bytesToB64Url(rawKey), meta);
+      }
       final sep = base.contains('?') ? '&' : '?';
       return '$base${sep}k=${bytesToB64Url(rawKey)}';
     } catch (_) {
@@ -160,7 +183,7 @@ class _SharesScreenState extends State<SharesScreen>
                       DropdownMenuItem(
                         value: f,
                         child: Text(
-                          '${f.id.substring(0, 8)} · ${f.profile} · v${f.currentVersion}',
+                          '${_metas[f.id]?.name ?? f.id.substring(0, 8)} · v${f.currentVersion}',
                         ),
                       ),
                   ],
@@ -204,7 +227,9 @@ class _SharesScreenState extends State<SharesScreen>
                     Expanded(
                       child: TextField(
                         controller: hoursController,
-                        decoration: const InputDecoration(labelText: 'Expires in (hours)'),
+                        decoration: const InputDecoration(
+                          labelText: 'Expires in (hours)',
+                        ),
                         keyboardType: TextInputType.number,
                       ),
                     ),
@@ -212,7 +237,9 @@ class _SharesScreenState extends State<SharesScreen>
                     Expanded(
                       child: TextField(
                         controller: usesController,
-                        decoration: const InputDecoration(labelText: 'Max downloads'),
+                        decoration: const InputDecoration(
+                          labelText: 'Max downloads',
+                        ),
                         keyboardType: TextInputType.number,
                       ),
                     ),
@@ -247,8 +274,8 @@ class _SharesScreenState extends State<SharesScreen>
     });
     try {
       final expires = DateTime.now().toUtc().add(
-            Duration(hours: int.tryParse(hoursController.text) ?? 168),
-          );
+        Duration(hours: int.tryParse(hoursController.text) ?? 168),
+      );
       final payload = <String, dynamic>{
         'file_id': selected!.id,
         'version': selected!.currentVersion,
@@ -310,7 +337,10 @@ class _SharesScreenState extends State<SharesScreen>
     }
     setState(() => _busy = true);
     try {
-      final updated = await v.api.updateSharePin(share.token, pin: pin.isEmpty ? null : pin);
+      final updated = await v.api.updateSharePin(
+        share.token,
+        pin: pin.isEmpty ? null : pin,
+      );
       await _load(v, force: true);
       if (!mounted) return;
       setState(() {
@@ -375,10 +405,14 @@ class _SharesScreenState extends State<SharesScreen>
 
   void _openViewer({String? link}) {
     Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => ShareViewerScreen(initialLink: link),
-      ),
+      MaterialPageRoute(builder: (_) => ShareViewerScreen(initialLink: link)),
     );
+  }
+
+  Future<void> _openShare(VaultProvider v, ApiShare share) async {
+    final link = await _linkForAsync(v, share);
+    if (!mounted) return;
+    _openViewer(link: link);
   }
 
   @override
@@ -392,7 +426,10 @@ class _SharesScreenState extends State<SharesScreen>
         if (_error != null)
           Padding(
             padding: const EdgeInsets.all(8),
-            child: Text(_error!, style: const TextStyle(color: Colors.redAccent)),
+            child: Text(
+              _error!,
+              style: const TextStyle(color: Colors.redAccent),
+            ),
           ),
         if (_created != null && _createdLink != null)
           Card(
@@ -402,7 +439,19 @@ class _SharesScreenState extends State<SharesScreen>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Text('Share created', style: TextStyle(fontWeight: FontWeight.bold)),
+                  const Text(
+                    'Share created',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  if (_created != null)
+                    Text(
+                      _metas[_created!.fileId]?.name ??
+                          _created!.fileId.substring(0, 8),
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                      ),
+                    ),
                   const SizedBox(height: 6),
                   SelectableText(
                     _created!.pin != null ? 'PIN: ${_created!.pin}' : 'No PIN',
@@ -422,6 +471,13 @@ class _SharesScreenState extends State<SharesScreen>
                         onPressed: () => _copy(v, _created!),
                         icon: const Icon(Icons.copy, size: 16),
                         label: const Text('Copy link'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () => SharePlus.instance.share(
+                          ShareParams(text: _createdLink!),
+                        ),
+                        icon: const Icon(Icons.share, size: 16),
+                        label: const Text('Share'),
                       ),
                       OutlinedButton.icon(
                         onPressed: () => _showQr(v, _created!),
@@ -445,10 +501,13 @@ class _SharesScreenState extends State<SharesScreen>
               ),
             ),
           ),
-        TabBar(controller: _tabs, tabs: const [
-          Tab(text: 'My shares'),
-          Tab(text: 'Shared with me'),
-        ]),
+        TabBar(
+          controller: _tabs,
+          tabs: const [
+            Tab(text: 'My shares'),
+            Tab(text: 'Shared with me'),
+          ],
+        ),
         Expanded(
           child: TabBarView(
             controller: _tabs,
@@ -462,7 +521,11 @@ class _SharesScreenState extends State<SharesScreen>
     );
   }
 
-  Widget _shareList(VaultProvider v, List<ApiShare> shares, {required bool owned}) {
+  Widget _shareList(
+    VaultProvider v,
+    List<ApiShare> shares, {
+    required bool owned,
+  }) {
     if (_busy && shares.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -471,7 +534,9 @@ class _SharesScreenState extends State<SharesScreen>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(owned ? 'No shares created yet.' : 'Nothing shared with you yet.'),
+            Text(
+              owned ? 'No shares created yet.' : 'Nothing shared with you yet.',
+            ),
             const SizedBox(height: 12),
             if (owned)
               FilledButton.icon(
@@ -504,7 +569,7 @@ class _SharesScreenState extends State<SharesScreen>
                   color: active ? const Color(0xFF00D4FF) : Colors.grey,
                 ),
                 title: Text(
-                  '${s.fileId.substring(0, 8)} · ${s.recipientEmail ?? 'anyone'}',
+                  '${_metas[s.fileId]?.name ?? s.fileId.substring(0, 8)} · ${s.recipientEmail ?? 'anyone'}',
                   style: TextStyle(
                     decoration: active ? null : TextDecoration.lineThrough,
                   ),
@@ -538,14 +603,26 @@ class _SharesScreenState extends State<SharesScreen>
                                 case 'revoke':
                                   _revoke(v, s);
                                 case 'open':
-                                  _openViewer();
+                                  _openShare(v, s);
                               }
                             },
                             itemBuilder: (_) => const [
-                              PopupMenuItem(value: 'open', child: Text('Open link')),
-                              PopupMenuItem(value: 'pin', child: Text('Change PIN')),
-                              PopupMenuItem(value: 'regen', child: Text('Regenerate link')),
-                              PopupMenuItem(value: 'revoke', child: Text('Revoke')),
+                              PopupMenuItem(
+                                value: 'open',
+                                child: Text('Open link'),
+                              ),
+                              PopupMenuItem(
+                                value: 'pin',
+                                child: Text('Change PIN'),
+                              ),
+                              PopupMenuItem(
+                                value: 'regen',
+                                child: Text('Regenerate link'),
+                              ),
+                              PopupMenuItem(
+                                value: 'revoke',
+                                child: Text('Revoke'),
+                              ),
                             ],
                           ),
                         ],
@@ -553,7 +630,7 @@ class _SharesScreenState extends State<SharesScreen>
                     : IconButton(
                         icon: const Icon(Icons.open_in_new),
                         tooltip: 'Open share',
-                        onPressed: () => _openViewer(),
+                        onPressed: () => _openViewer(link: s.shareUrl),
                       ),
               ),
             );

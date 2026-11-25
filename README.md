@@ -116,6 +116,8 @@ PUBLIC_SHARE_DOMAIN=http://localhost:3000
 CRYPTAVAULT_ENV=development
 ```
 
+Use `PUBLIC_SHARE_DOMAIN=https://cryptavault.dhruvmulani.com` for the public deployment; the `localhost` value above is only for local development.
+
 Optional cloud connectors: `GDRIVE_*`, `DROPBOX_*`, and `ONEDRIVE_*`. They remain config-ready until OAuth applications are supplied.
 
 ### 3. Start the local S3 service
