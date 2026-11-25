@@ -2,12 +2,13 @@
 
 **AI-assisted adaptive hybrid cryptographic storage with a strict client-side zero-knowledge boundary.**
 
-CryptaVault encrypts files and metadata on the client, selects cryptographic primitives from a versioned catalog, and stores only ciphertext, wrapped keys, integrity metadata, and non-identifying policy records. The current dynamic deployment is a local full-stack application: React + Vite web client, FastAPI coordination API, Neon Postgres metadata, S3-compatible ciphertext storage (SeaweedFS locally), and a Typer CLI that shares the same remote API and wire format.
+CryptaVault encrypts files and metadata on the client, selects cryptographic primitives from a versioned catalog, and stores only ciphertext, wrapped keys, integrity metadata, and non-identifying policy records. The current dynamic deployment is a local full-stack application: React + Vite web client, FastAPI coordination API, Neon Postgres metadata, S3-compatible ciphertext storage (SeaweedFS locally), a Typer CLI, and a Flutter mobile/desktop app that all share the same remote API and wire format.
 
 [![Tests](https://img.shields.io/badge/tests-165%20passing-brightgreen.svg)](packages/core/tests)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![API](https://img.shields.io/badge/API-FastAPI%202.0.0-009688.svg)](packages/api)
 [![Web](https://img.shields.io/badge/web-React%20%2B%20Vite-646CFF.svg)](packages/web)
+[![Flutter](https://img.shields.io/badge/mobile-Flutter-02569B.svg)](packages/mobile)
 
 > The GitHub Pages workflow can host the SPA assets, but the dynamic application requires a reachable FastAPI instance. GitHub Pages cannot host the API, Neon database, or S3 bucket. The reproducible demo runs locally; see [docs/demo.md](docs/demo.md).
 
@@ -18,7 +19,7 @@ CryptaVault encrypts files and metadata on the client, selects cryptographic pri
 ```
 Client boundary (plaintext and private keys never leave)
 ┌──────────────────────────────────────────────────────────────────────┐
-│ CLI (Python)                          Browser (React + WebCrypto)    │
+│ CLI (Python)          Browser (React + WebCrypto)   Flutter (Dart)   │
 │                                                                      │
 │ passphrase ──► PBKDF2 ──► master key ──► per-file key                │
 │ file ──► optional gzip ──► chunked AES-256-GCM ──► CVW1 container    │
@@ -67,6 +68,7 @@ The dynamic web/remote path mirrors the profile names, descriptions, and chunk s
 | Live dashboard | User/admin aggregates, storage mix, quota, recent files, activity counters | [docs/portal.md](docs/portal.md) |
 | Admin console | Role/quota/suspension controls, feature flags, storage health tests, system health | [docs/portal.md](docs/portal.md) |
 | Remote CLI | Login/register, workspaces, upload/download, versions, trash, shares, share decryption | [docs/cli.md](docs/cli.md) |
+| Flutter app | Android/iOS/Linux/Web client with the same ZK crypto, vault, shares/QR/PIN, status and admin | [packages/mobile](packages/mobile) |
 | Storage | S3-compatible local SeaweedFS, fallback/health checks, config-ready cloud connectors | [docs/api.md](docs/api.md) |
 | Adaptive profiles | Six profiles, slider resolution, persisted active profile, profile API | [docs/crypto_catalog.md](docs/crypto_catalog.md) |
 | Crypto catalog | Versioned catalog, lifecycle gates, 88 algorithms, wire IDs, implemented/runtime flags | [docs/crypto_catalog.md](docs/crypto_catalog.md) |
@@ -248,9 +250,23 @@ See [docs/cli.md](docs/cli.md) for the full offline command reference.
 # Web
 npx -y pnpm --filter @cryptavault/web run typecheck
 npx -y pnpm --filter @cryptavault/web run build
+
+# Flutter (Flutter 3.47+/Dart 3.13+)
+cd packages/mobile
+flutter analyze
+flutter test            # includes live-API interop when the local API is running
+flutter build apk --release
+flutter build web --release
+flutter build linux --release
 ```
 
-Current suite: **165 tests passing**, ruff/mypy clean for the dynamic packages, and the web client typechecks and builds. The backend tests use an isolated SQLite database under `/tmp/opencode/cryptavault-tests/`; production uses Neon Postgres.
+Current suite: **165 Python tests passing**, ruff/mypy clean for the dynamic packages, the web client typechecks and builds, and the Flutter app analyzes, passes 9 tests, and builds for Android/Web/Linux. The backend tests use an isolated SQLite database under `/tmp/opencode/cryptavault-tests/`; production uses Neon Postgres.
+
+### Flutter app
+
+`packages/mobile` is a complete Flutter client for Android, iOS, Linux, and Web. It uses the same `CVW1` container format and PBKDF2/AES-GCM contracts as the web client, so files are interoperable across all clients. Features include register/login/unlock with a local master key, encrypted upload/download with profile and folder selection, trash/restore/permanent delete, shares with recipient email/8-digit PIN/QR/link regeneration/revocation, a share viewer for pasted links, workspaces, status/dashboard, and admin user/flag controls. Tokens are held in `flutter_secure_storage`; plaintext and keys never leave the device.
+
+On this machine Flutter is installed at `~/.local/share/rd-flutter` and permanently added to `PATH` (fish, bash, and profile), so `flutter` works in new shells without extra setup. The default server URL is `https://cryptavault.dhruvmulani.com`; change it under **Settings → Connection** for a local API.
 
 ---
 
@@ -262,6 +278,7 @@ packages/
 ├── api/     # FastAPI auth, workspaces, files, shares, storage, dashboard, admin
 ├── cli/     # Typer offline toolkit + `cryptavault remote` API client
 ├── web/     # React + Vite zero-knowledge dynamic client
+├── mobile/  # Flutter Android/iOS/Linux/Web zero-knowledge client
 ├── admin/   # separate governance console scaffold
 └── wasm/    # WebAssembly binding scaffold
 docs/        # demo, portal, CLI, deployment, catalog, container, security, API references

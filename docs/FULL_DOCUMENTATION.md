@@ -29,6 +29,7 @@ CryptaVault is a zero-knowledge, crypto-agile encrypted storage framework. Files
 - `packages/core` - crypto engine, profiles, storage abstractions.
 - `packages/api` - FastAPI backend, auth/workspaces/files/shares/admin routes.
 - `packages/web` - React/Vite zero-knowledge web portal.
+- `packages/mobile` - Flutter zero-knowledge client (Android/iOS/Linux/Web).
 - `packages/cli` - Typer/Rich CLI.
 - `packages/admin` - admin console package.
 - `packages/wasm` - WASM bindings/experiments.
@@ -143,9 +144,19 @@ npx -y pnpm@9.15.0 --filter @cryptavault/web run build
 # Python
 PYTHONPATH=packages/api:packages/core .venv/bin/pytest packages/core/tests -q
 PYTHONPATH=packages/api:packages/core .venv/bin/pytest packages/api/tests -q
+
+# Flutter (mobile/desktop/web)
+cd packages/mobile
+flutter analyze
+flutter test
+flutter build apk --release
+flutter build web --release
+flutter build linux --release
 ```
 
-Known env limitations: PQ tests require liboqs; some API/CLI tests may need isolated DB fixtures.
+`packages/mobile/test/api_interop_test.dart` runs against the live API at `http://127.0.0.1:8000` when it is available and exits cleanly otherwise. It exercises registration, login/unlock, encrypted upload/download with hash verification, share PIN/recipient bypass/PIN change/regeneration/revocation, and trash/restore/permanent delete using the exact client code paths.
+
+Known env limitations: PQ tests require liboqs; some API/CLI tests may need isolated DB fixtures. Web builds need `CHROME_EXECUTABLE` (Chrome/Chromium) and Linux builds need `ninja`.
 
 ## 10. Security Notes
 
@@ -160,3 +171,50 @@ Known env limitations: PQ tests require liboqs; some API/CLI tests may need isol
 - **Upload fails**: verify storage target config points to writable path and is default/enabled.
 - **Public domain not resolving locally**: check DNS; local Tailscale DNS may override resolution. Test with `curl --resolve ...`.
 - **Auth/register WebCrypto error**: ensure auth key derivation is extractable for verifier export (fixed in web client).
+## 12. Flutter mobile/desktop app
+
+The Flutter client in `packages/mobile` targets Android, iOS, Linux, and Web from one Dart codebase. It is a full client, not a wrapper: crypto runs on the device using `cryptography` (PBKDF2-HMAC-SHA256, AES-256-GCM), and the API only ever receives ciphertext, wrapped keys, and sealed metadata.
+
+### Environment
+
+Flutter is installed at `~/.local/share/rd-flutter` (Flutter 3.47.5 / Dart 3.13.4). It is permanently exported in:
+
+- `~/.config/fish/conf.d/flutter.fish`
+- `~/.bashrc` and `~/.profile`
+
+So `flutter` and `dart` work in new shells. For web builds set `CHROME_EXECUTABLE=/usr/bin/google-chrome-stable`; for Linux builds `ninja` must be installed.
+
+### Features
+
+- **Auth**: register/login with client-derived `auth_verifier`, vault check (`cryptavault:verifier:v1` under AAD `vault:verifier`), lock/unlock, sign out.
+- **Vault**: list decrypted metadata, upload with encryption profile + folder, download/decrypt with SHA-256 verification, trash/restore/permanent delete, folder filter/search.
+- **Shares**: create with recipient email, 8-digit PIN (auto-assigned), password, expiry, max uses; copy link with `#k=` key fragment, QR code, native share sheet, change PIN, regenerate (invalidates old token), revoke, "Shared with me" inbox.
+- **Share viewer**: paste a full share link, parse token/key fragment, PIN/password prompt, recipient-email bypass, download and decrypt locally.
+- **Workspaces**: list/select/create workspaces in Settings.
+- **Status**: dashboard counters, storage mix, system health, feature flags, and admin user controls (suspend/role) when signed in as admin.
+- **Zero-knowledge**: master key lives only in memory; JWT in `flutter_secure_storage`. The server URL defaults to `https://cryptavault.dhruvmulani.com` and can be changed in Settings.
+
+### Layout
+
+```
+packages/mobile/lib/
+├── main.dart, app.dart               # bootstrap and themed MaterialApp
+├── models/types.dart                 # API/container models
+├── services/crypto_service.dart      # CVW1 container + PBKDF2/AES-GCM helpers
+├── services/api_service.dart         # FastAPI client (auth/files/shares/admin)
+├── services/storage_service.dart     # secure token store + in-memory test store
+├── state/vault_provider.dart         # auth/master-key/workspace state
+└── screens/                          # auth, vault, shares, share viewer, status, settings
+```
+
+### Verification
+
+```
+flutter analyze          # no issues
+flutter test             # 9 tests passed (4 crypto + 5 live-API interop)
+flutter build apk --release
+flutter build web --release
+flutter build linux --release
+```
+
+Artifacts: `build/app/outputs/flutter-apk/app-release.apk`, `build/web/`, `build/linux/x64/release/bundle/cryptavault_mobile`.
