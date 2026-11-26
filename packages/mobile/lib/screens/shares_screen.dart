@@ -27,8 +27,11 @@ class _SharesScreenState extends State<SharesScreen>
   List<ApiShare> _mine = [];
   List<ApiShare> _received = [];
   String? _loadedWorkspace;
+  bool _loaded = false;
+  final Map<String, Map<String, dynamic>> _shareInfo = {};
   ApiShare? _created;
   String? _createdLink;
+  bool _batchCreated = false;
 
   @override
   void initState() {
@@ -45,7 +48,7 @@ class _SharesScreenState extends State<SharesScreen>
   Future<void> _load(VaultProvider v, {bool force = false}) async {
     final ws = v.currentWorkspace?.id;
     if (ws == null || v.masterKey == null) return;
-    if (!force && _loadedWorkspace == ws && _mine.isNotEmpty) return;
+    if (!force && _loaded && _loadedWorkspace == ws) return;
     setState(() {
       _busy = true;
       _error = null;
@@ -73,12 +76,23 @@ class _SharesScreenState extends State<SharesScreen>
           // Keep the file selectable even if its metadata cannot be opened.
         }
       }
+      final infos = <String, Map<String, dynamic>>{};
+      for (final share in [...mine, ...received]) {
+        try {
+          infos[share.token] = await v.api.shareInfo(share.token);
+        } catch (_) {
+          // Revoked/expired shares cannot return policy info; show list fields instead.
+        }
+      }
       if (!mounted) return;
       setState(() {
         _files = files;
         _metas
           ..clear()
           ..addAll(metas);
+        _shareInfo
+          ..clear()
+          ..addAll(infos);
         _mine = mine;
         _received = received;
         _loadedWorkspace = ws;
@@ -87,6 +101,7 @@ class _SharesScreenState extends State<SharesScreen>
       if (mounted) setState(() => _error = e.toString());
     } finally {
       if (mounted) setState(() => _busy = false);
+      _loaded = true;
     }
   }
 
@@ -294,6 +309,72 @@ class _SharesScreenState extends State<SharesScreen>
       setState(() {
         _created = share;
         _createdLink = link;
+        _batchCreated = false;
+      });
+    } catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _shareAll(VaultProvider v) async {
+    final targets = _files.where((f) => f.deletedAt == null).toList();
+    if (targets.isEmpty || v.masterKey == null) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Share all files?'),
+        content: Text(
+          'Create a separate server-enforced share for ${targets.length} file(s) '
+          'in this workspace.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final expires = DateTime.now().toUtc().add(const Duration(hours: 168));
+      final blocks = <String>[];
+      for (final f in targets) {
+        final share = await v.api.createShare({
+          'file_id': f.id,
+          'version': f.currentVersion,
+          'max_uses': 5,
+          'expires_at': expires.toIso8601String(),
+        });
+        final rawKey = await unwrapRawKey(
+          v.masterKey!,
+          Sealed(ivB64: f.wrappedIv, ctB64: f.wrappedKey),
+          'filekey:${f.id}',
+        );
+        final meta = _metas[f.id];
+        final link = meta != null
+            ? buildServerShareLink(share.shareUrl, bytesToB64Url(rawKey), meta)
+            : '${share.shareUrl}?k=${bytesToB64Url(rawKey)}';
+        blocks.add(
+          '${meta?.name ?? f.id}\n$link\nPIN: ${share.pin ?? '(none)'}',
+        );
+      }
+      await _load(v, force: true);
+      if (!mounted) return;
+      setState(() {
+        _created = null;
+        _createdLink = blocks.join('\n\n');
+        _batchCreated = true;
       });
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
@@ -415,14 +496,128 @@ class _SharesScreenState extends State<SharesScreen>
     _openViewer(link: link);
   }
 
+  int _asInt(dynamic value, [int fallback = 0]) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    return int.tryParse(value?.toString() ?? '') ?? fallback;
+  }
+
+  String? _text(dynamic value) {
+    if (value == null) return null;
+    final text = value.toString();
+    return text.isEmpty ? null : text;
+  }
+
+  int _remaining(ApiShare s) {
+    final info = _shareInfo[s.token];
+    return _asInt(info?['remaining_uses'], s.remainingUses);
+  }
+
+  String _status(ApiShare s) {
+    if (s.revoked) return 'Revoked';
+    if (_remaining(s) <= 0) return 'Exhausted';
+    final info = _shareInfo[s.token];
+    final raw = _text(info?['expires_at']) ?? s.expiresAt;
+    final expiry = raw == null ? null : DateTime.tryParse(raw);
+    if (expiry != null && expiry.toLocal().isBefore(DateTime.now())) {
+      return 'Expired';
+    }
+    return 'Active';
+  }
+
+  String _formatBytes(int bytes) {
+    if (bytes <= 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    final exponent = (bytes < 1 ? 0 : (bytes.bitLength - 1) ~/ 10).clamp(0, 4);
+    final value = bytes / (1 << (10 * exponent));
+    return '${value >= 10 ? value.toStringAsFixed(0) : value.toStringAsFixed(1)} ${units[exponent]}';
+  }
+
+  Widget _summaryCard(String label, String value) {
+    return Expanded(
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+          child: Column(
+            children: [
+              Text(
+                value,
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF00D4FF),
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                label,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 10, color: Colors.white60),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final v = context.watch<VaultProvider>();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_busy) _load(v);
     });
+    final activeCount = _mine.where((s) => _status(s) == 'Active').length;
+    final pinCount = _mine.where((s) => s.pinProtected).length;
     return Column(
       children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+          child: Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _busy ? null : () => _load(v, force: true),
+                  icon: const Icon(Icons.refresh, size: 16),
+                  label: const Text('Refresh'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _busy || _files.isEmpty
+                      ? null
+                      : () => _shareAll(v),
+                  icon: const Icon(Icons.share, size: 16),
+                  label: const Text('Share all'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: _busy || _files.isEmpty ? null : () => _create(v),
+                  icon: const Icon(Icons.add_link, size: 16),
+                  label: const Text('Create'),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Row(
+            children: [
+              _summaryCard('Active', '$activeCount'),
+              const SizedBox(width: 8),
+              _summaryCard('My shares', '${_mine.length}'),
+              const SizedBox(width: 8),
+              _summaryCard('Received', '${_received.length}'),
+              const SizedBox(width: 8),
+              _summaryCard('PIN', '$pinCount'),
+            ],
+          ),
+        ),
         if (_error != null)
           Padding(
             padding: const EdgeInsets.all(8),
@@ -431,7 +626,7 @@ class _SharesScreenState extends State<SharesScreen>
               style: const TextStyle(color: Colors.redAccent),
             ),
           ),
-        if (_created != null && _createdLink != null)
+        if (_createdLink != null && (_created != null || _batchCreated))
           Card(
             margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
             child: Padding(
@@ -439,9 +634,9 @@ class _SharesScreenState extends State<SharesScreen>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Text(
-                    'Share created',
-                    style: TextStyle(fontWeight: FontWeight.bold),
+                  Text(
+                    _batchCreated ? 'Shares created' : 'Share created',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
                   if (_created != null)
                     Text(
@@ -452,25 +647,39 @@ class _SharesScreenState extends State<SharesScreen>
                         fontSize: 12,
                       ),
                     ),
-                  const SizedBox(height: 6),
-                  SelectableText(
-                    _created!.pin != null ? 'PIN: ${_created!.pin}' : 'No PIN',
-                    style: const TextStyle(color: Color(0xFF00D4FF)),
-                  ),
+                  if (_created != null) ...[
+                    const SizedBox(height: 6),
+                    SelectableText(
+                      _created!.pin != null
+                          ? 'PIN: ${_created!.pin}'
+                          : 'No PIN',
+                      style: const TextStyle(color: Color(0xFF00D4FF)),
+                    ),
+                  ],
                   const SizedBox(height: 4),
                   SelectableText(
                     _createdLink!,
                     style: const TextStyle(fontSize: 10, color: Colors.white60),
-                    maxLines: 2,
+                    maxLines: _batchCreated ? 8 : 2,
                   ),
                   const SizedBox(height: 8),
                   Wrap(
                     spacing: 8,
                     children: [
                       FilledButton.icon(
-                        onPressed: () => _copy(v, _created!),
+                        onPressed: () async {
+                          final messenger = ScaffoldMessenger.of(context);
+                          await Clipboard.setData(
+                            ClipboardData(text: _createdLink!),
+                          );
+                          if (mounted) {
+                            messenger.showSnackBar(
+                              const SnackBar(content: Text('Links copied')),
+                            );
+                          }
+                        },
                         icon: const Icon(Icons.copy, size: 16),
-                        label: const Text('Copy link'),
+                        label: Text(_batchCreated ? 'Copy all' : 'Copy link'),
                       ),
                       OutlinedButton.icon(
                         onPressed: () => SharePlus.instance.share(
@@ -479,19 +688,22 @@ class _SharesScreenState extends State<SharesScreen>
                         icon: const Icon(Icons.share, size: 16),
                         label: const Text('Share'),
                       ),
-                      OutlinedButton.icon(
-                        onPressed: () => _showQr(v, _created!),
-                        icon: const Icon(Icons.qr_code, size: 16),
-                        label: const Text('QR'),
-                      ),
-                      OutlinedButton(
-                        onPressed: () => _openViewer(link: _createdLink),
-                        child: const Text('Open'),
-                      ),
+                      if (_created != null)
+                        OutlinedButton.icon(
+                          onPressed: () => _showQr(v, _created!),
+                          icon: const Icon(Icons.qr_code, size: 16),
+                          label: const Text('QR'),
+                        ),
+                      if (_created != null)
+                        OutlinedButton(
+                          onPressed: () => _openViewer(link: _createdLink),
+                          child: const Text('Open'),
+                        ),
                       TextButton(
                         onPressed: () => setState(() {
                           _created = null;
                           _createdLink = null;
+                          _batchCreated = false;
                         }),
                         child: const Text('Done'),
                       ),
@@ -561,23 +773,58 @@ class _SharesScreenState extends State<SharesScreen>
           separatorBuilder: (_, _) => const SizedBox(height: 8),
           itemBuilder: (ctx, i) {
             final s = shares[i];
-            final active = !s.revoked && s.remainingUses > 0;
+            final info = _shareInfo[s.token];
+            final status = _status(s);
+            final active = status == 'Active';
+            final version = _asInt(info?['version'], s.version);
+            final remaining = _remaining(s);
+            final expiry = _text(info?['expires_at']) ?? s.expiresAt;
+            final recipient =
+                _text(info?['recipient_email']) ?? s.recipientEmail;
+            final ciphertext = _asInt(info?['ciphertext_size']);
+            final profile = _text(info?['profile']);
+            final meta = _metas[s.fileId];
             return Card(
               child: ListTile(
+                isThreeLine: true,
                 leading: Icon(
                   s.pinProtected ? Icons.key : Icons.link,
                   color: active ? const Color(0xFF00D4FF) : Colors.grey,
                 ),
                 title: Text(
-                  '${_metas[s.fileId]?.name ?? s.fileId.substring(0, 8)} · ${s.recipientEmail ?? 'anyone'}',
+                  meta?.name ?? s.fileId.substring(0, 8),
                   style: TextStyle(
                     decoration: active ? null : TextDecoration.lineThrough,
                   ),
                 ),
-                subtitle: Text(
-                  '${s.remainingUses}/${s.maxUses} uses · ${s.expiresAt ?? 'no expiry'}'
-                  '${s.passwordProtected ? ' · password' : ''}',
-                  style: const TextStyle(fontSize: 11),
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: 2),
+                    Text(
+                      'Token: ${s.token.substring(0, s.token.length > 12 ? 12 : s.token.length)}… · v$version · $status',
+                      style: const TextStyle(fontSize: 11),
+                    ),
+                    Text(
+                      '${recipient ?? 'Anyone with link'} · $remaining/${s.maxUses} uses',
+                      style: const TextStyle(fontSize: 11),
+                    ),
+                    Text(
+                      'Expires: ${expiry ?? 'never'}'
+                      '${s.passwordProtected ? ' · password' : ''}'
+                      '${s.pinProtected ? ' · PIN' : ''}',
+                      style: const TextStyle(fontSize: 11),
+                    ),
+                    if (ciphertext > 0 || profile != null)
+                      Text(
+                        '${ciphertext > 0 ? 'Ciphertext: ${_formatBytes(ciphertext)}' : ''}'
+                        '${profile != null ? ' · $profile' : ''}',
+                        style: const TextStyle(
+                          fontSize: 10,
+                          color: Colors.white60,
+                        ),
+                      ),
+                  ],
                 ),
                 trailing: owned
                     ? Row(
@@ -636,12 +883,13 @@ class _SharesScreenState extends State<SharesScreen>
             );
           },
         ),
-        if (owned && !_busy)
+        if (owned)
           Positioned(
             right: 16,
             bottom: 16,
             child: FloatingActionButton(
-              onPressed: () => _create(v),
+              onPressed: _busy || _files.isEmpty ? null : () => _create(v),
+              tooltip: 'Create share',
               child: const Icon(Icons.add_link),
             ),
           ),
